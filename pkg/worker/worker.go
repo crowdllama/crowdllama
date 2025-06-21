@@ -1,0 +1,184 @@
+package worker
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/ipfs/go-cid"
+	dht "github.com/libp2p/go-libp2p-kad-dht"
+	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/matiasinsaurralde/crowdllama/internal/discovery"
+	"github.com/matiasinsaurralde/crowdllama/pkg/consumer"
+	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
+	"github.com/multiformats/go-multihash"
+)
+
+type Worker struct {
+	Host     host.Host
+	DHT      *dht.IpfsDHT
+	Metadata *crowdllama.CrowdLlamaResource
+}
+
+func NewWorker(ctx context.Context) (*Worker, error) {
+	h, kadDHT, err := discovery.NewHostAndDHT(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := discovery.BootstrapDHT(ctx, h, kadDHT); err != nil {
+		return nil, err
+	}
+
+	fmt.Println("BootstrapDHT ok")
+	h.SetStreamHandler(consumer.InferenceProtocol, func(s network.Stream) {
+		defer s.Close()
+
+		fmt.Println("StreamHandler is called")
+
+		// Set a read deadline to avoid blocking indefinitely
+		s.SetReadDeadline(time.Now().Add(5 * time.Second))
+
+		// Read the input data with a fixed buffer
+		buf := make([]byte, 1024)
+		n, err := s.Read(buf)
+		if err != nil {
+			log.Printf("Failed to read from stream: %v", err)
+			return
+		}
+
+		input := string(buf[:n])
+		log.Printf("Worker received inference request (%d bytes): %s", n, input)
+
+		// Process the input and generate response
+		output := "hardcoded output from worker for input: " + input + "\n"
+
+		// Write the response
+		responseBytes := []byte(output)
+		log.Printf("Worker writing %d bytes: %s", len(responseBytes), output)
+		for i, b := range responseBytes {
+			log.Printf("Writing byte %d: '%s' (ASCII: %d)", i, string(b), b)
+		}
+
+		_, err = s.Write(responseBytes)
+		if err != nil {
+			log.Printf("Failed to write response: %v", err)
+			return
+		}
+
+		log.Printf("Worker sent response: %s", output)
+		fmt.Println("StreamHandler completed")
+	})
+
+	// Add metadata request handler
+	h.SetStreamHandler(crowdllama.MetadataProtocol, func(s network.Stream) {
+		defer s.Close()
+		log.Printf("Worker received metadata request from %s", s.Conn().RemotePeer().String())
+
+		// We'll set up the metadata handler after creating the metadata
+		// This will be handled in the main function
+	})
+
+	// Initialize metadata
+	metadata := crowdllama.NewCrowdLlamaResource(h.ID().String())
+
+	return &Worker{
+		Host:     h,
+		DHT:      kadDHT,
+		Metadata: metadata,
+	}, nil
+}
+
+// SetupMetadataHandler sets up the metadata request handler
+func (w *Worker) SetupMetadataHandler() {
+	w.Host.SetStreamHandler(crowdllama.MetadataProtocol, func(s network.Stream) {
+		defer s.Close()
+		log.Printf("Worker received metadata request from %s", s.Conn().RemotePeer().String())
+
+		// Serialize metadata to JSON
+		metadataJSON, err := w.Metadata.ToJSON()
+		if err != nil {
+			log.Printf("Failed to serialize metadata: %v", err)
+			return
+		}
+
+		// Send metadata response
+		_, err = s.Write(metadataJSON)
+		if err != nil {
+			log.Printf("Failed to send metadata: %v", err)
+			return
+		}
+
+		log.Printf("Worker sent metadata (%d bytes): %s", len(metadataJSON), string(metadataJSON))
+	})
+}
+
+// UpdateMetadata updates the worker's metadata
+func (w *Worker) UpdateMetadata(models []string, tokensThroughput float64, vramGB int, load float64, gpuModel string) {
+	w.Metadata.SupportedModels = models
+	w.Metadata.TokensThroughput = tokensThroughput
+	w.Metadata.VRAMGB = vramGB
+	w.Metadata.Load = load
+	w.Metadata.GPUModel = gpuModel
+	w.Metadata.LastUpdated = time.Now()
+}
+
+// PublishMetadata publishes the worker's metadata to the DHT
+func (w *Worker) PublishMetadata(ctx context.Context) error {
+	data, err := w.Metadata.ToJSON()
+	if err != nil {
+		return fmt.Errorf("failed to serialize metadata: %w", err)
+	}
+
+	// Create a CID from the metadata
+	mh, err := multihash.Sum(data, multihash.SHA2_256, -1)
+	if err != nil {
+		return fmt.Errorf("failed to create multihash: %w", err)
+	}
+
+	c := cid.NewCidV1(cid.Raw, mh)
+
+	// Use Provide instead of PutValue
+	err = w.DHT.Provide(ctx, c, true)
+	if err != nil {
+		return fmt.Errorf("failed to provide metadata to DHT: %w", err)
+	}
+
+	log.Printf("Published metadata to DHT with CID: %s", c.String())
+	return nil
+}
+
+// AdvertiseModel periodically announces model availability and advertises the worker using Provide
+func (w *Worker) AdvertiseModel(ctx context.Context, namespace string) {
+	go func() {
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
+
+		// Generate a CID from the namespace string
+		mh, err := multihash.Sum([]byte(namespace), multihash.IDENTITY, -1)
+		if err != nil {
+			panic("Failed to create multihash for namespace: " + err.Error())
+		}
+		cid := cid.NewCidV1(cid.Raw, mh)
+
+		for {
+			select {
+			case <-ticker.C:
+				// Advertise the worker using Provide
+				err := w.DHT.Provide(ctx, cid, true)
+				if err != nil {
+					log.Printf("Failed to advertise worker: %v", err)
+				} else {
+					log.Printf("Worker advertised with CID: %s", cid.String())
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
+func BootstrapWithPeer(ctx context.Context, w *Worker) error {
+	return discovery.BootstrapDHT(ctx, w.Host, w.DHT)
+}

@@ -1,0 +1,51 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.cov
+
+# Dependency directories (remove the comment below if you use Go modules)
+# vendor/
+
+# Go workspace file
+*.code-workspace
+
+# IDE/editor directories and files
+.idea/
+.vscode/
+*.swp
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Archives
+*.tar
+*.bz2
+*.gz
+
+# Build directories
+bin/
+obj/
+
+# Test binary, cache, and result files
+test.out
+*.test
+
+# Go build cache
+go-build/
+
+# Module download cache (if not using GOPATH)
+.gocache/
+
+# GoLand project files
+*.iml
+
+# Logs
+*.log 
