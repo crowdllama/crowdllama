@@ -7,7 +7,9 @@ import (
 	"log"
 	"os"
 
+	"github.com/matiasinsaurralde/crowdllama/pkg/config"
 	"github.com/matiasinsaurralde/crowdllama/pkg/consumer"
+	"go.uber.org/zap"
 )
 
 const version = "0.1.0"
@@ -26,8 +28,24 @@ func main() {
 		fmt.Println("crowdllama version", version)
 	case "start":
 		startCmd := flag.NewFlagSet("start", flag.ExitOnError)
-		// Add start command flags here if needed
+
+		// Initialize configuration
+		cfg := config.NewConfiguration()
+		cfg.ParseFlags(startCmd)
+
 		startCmd.Parse(os.Args[2:])
+
+		// Setup logger
+		if err := cfg.SetupLogger(); err != nil {
+			log.Fatalf("Failed to setup logger: %v", err)
+		}
+		logger := cfg.GetLogger()
+		defer logger.Sync()
+
+		if cfg.IsVerbose() {
+			logger.Info("Verbose mode enabled")
+		}
+
 		if startCmd.NArg() < 1 {
 			fmt.Println("Usage: crowdllama start <input>")
 			os.Exit(1)
@@ -39,37 +57,42 @@ func main() {
 
 		c, err := consumer.NewConsumer(ctx)
 		if err != nil {
-			log.Fatalf("Failed to initialize consumer: %v", err)
+			logger.Fatal("Failed to initialize consumer", zap.Error(err))
 		}
 		// c.ListKnownPeersLoop()
 
 		// Discover available workers
-		fmt.Println("Discovering available workers...")
+		logger.Info("Discovering available workers")
 		workers, err := c.DiscoverWorkers(ctx)
 		if err != nil {
-			log.Fatalf("Failed to discover workers: %v", err)
+			logger.Fatal("Failed to discover workers", zap.Error(err))
 		}
 
 		if len(workers) == 0 {
-			log.Fatalf("No workers found. Make sure a worker is running.")
+			logger.Fatal("No workers found. Make sure a worker is running.")
 		}
 
 		// Find the best worker for the task
-		fmt.Println("Finding best available worker...")
+		logger.Info("Finding best available worker")
 		bestWorker, err := c.FindBestWorker(ctx, "llama-2-7b") // Default model
 		if err != nil {
-			log.Fatalf("Failed to find suitable worker: %v", err)
+			logger.Fatal("Failed to find suitable worker", zap.Error(err))
 		}
 
-		fmt.Printf("Selected worker: %s (GPU: %s, Throughput: %.2f tokens/sec, Load: %.2f)\n",
-			bestWorker.PeerID, bestWorker.GPUModel, bestWorker.TokensThroughput, bestWorker.Load)
+		logger.Info("Selected worker",
+			zap.String("peer_id", bestWorker.PeerID),
+			zap.String("gpu_model", bestWorker.GPUModel),
+			zap.Float64("tokens_throughput", bestWorker.TokensThroughput),
+			zap.Float64("load", bestWorker.Load))
 
-		fmt.Printf("Requesting inference from worker %s with input: %s\n", bestWorker.PeerID, input)
+		logger.Info("Requesting inference",
+			zap.String("worker_peer_id", bestWorker.PeerID),
+			zap.String("input", input))
 		resp, err := c.RequestInference(ctx, bestWorker.PeerID, input)
 		if err != nil {
-			log.Fatalf("Failed to request inference: %v", err)
+			logger.Fatal("Failed to request inference", zap.Error(err))
 		}
-		fmt.Printf("Received response from worker: %s\n", resp)
+		logger.Info("Received response from worker", zap.String("response", resp))
 	default:
 		fmt.Printf("Unknown command: %s\n", os.Args[1])
 		os.Exit(1)

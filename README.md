@@ -2,7 +2,7 @@
 
 <img src="image.png" alt="CrowdLlama" width="50%">
 
-CrowdLlama is a distributed system for discovering and coordinating GPU worker nodes using a P2P network. It leverages libp2p and IPFS technologies to enable decentralized resource discovery and metadata sharing among nodes.
+CrowdLlama is a distributed system that leverages the open-source [Ollama project](https://github.com/ollama/ollama) to run LLM inference tasks across multiple nodes using peer-to-peer (P2P) networking, enabling collaborative large language model inference workloads.
 
 ## Features
 - DHT-based peer discovery

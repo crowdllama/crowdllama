@@ -8,8 +8,10 @@ import (
 	"os"
 	"time"
 
+	"github.com/matiasinsaurralde/crowdllama/pkg/config"
 	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
 	"github.com/matiasinsaurralde/crowdllama/pkg/worker"
+	"go.uber.org/zap"
 )
 
 const version = "0.1.0"
@@ -28,17 +30,34 @@ func main() {
 		fmt.Println("crowdllama version", version)
 	case "start":
 		startCmd := flag.NewFlagSet("start", flag.ExitOnError)
+
+		// Initialize configuration
+		cfg := config.NewConfiguration()
+		cfg.ParseFlags(startCmd)
+
 		startCmd.Parse(os.Args[2:])
-		fmt.Println("Starting crowdllama...")
+
+		// Setup logger
+		if err := cfg.SetupLogger(); err != nil {
+			log.Fatalf("Failed to setup logger: %v", err)
+		}
+		logger := cfg.GetLogger()
+		defer logger.Sync()
+
+		if cfg.IsVerbose() {
+			logger.Info("Verbose mode enabled")
+		}
+
+		logger.Info("Starting crowdllama worker")
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
 		w, err := worker.NewWorker(ctx)
 		if err != nil {
-			log.Fatalf("Failed to initialize worker: %v", err)
+			logger.Fatal("Failed to initialize worker", zap.Error(err))
 		}
-		fmt.Printf("Worker Peer ID: %s\n", w.Host.ID().String())
+		logger.Info("Worker initialized", zap.String("peer_id", w.Host.ID().String()))
 
 		// Set up metadata handler
 		w.SetupMetadataHandler()
@@ -57,7 +76,7 @@ func main() {
 		w.AdvertiseModel(ctx, myNamespace)
 
 		// Keep running until interrupted
-		fmt.Println("Worker running. Press Ctrl+C to exit.")
+		logger.Info("Worker running. Press Ctrl+C to exit.")
 		for {
 			time.Sleep(10 * time.Second)
 		}
