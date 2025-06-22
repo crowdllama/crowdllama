@@ -1,9 +1,13 @@
 package worker
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"time"
 
 	"github.com/ipfs/go-cid"
@@ -15,6 +19,28 @@ import (
 	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
 	"github.com/multiformats/go-multihash"
 )
+
+// OllamaRequest represents the request structure for Ollama API
+type OllamaRequest struct {
+	Model    string    `json:"model"`
+	Messages []Message `json:"messages"`
+	Stream   bool      `json:"stream"`
+}
+
+type Message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// OllamaResponse represents the response structure from Ollama API
+type OllamaResponse struct {
+	Model      string    `json:"model"`
+	CreatedAt  time.Time `json:"created_at"`
+	Message    Message   `json:"message"`
+	Stream     bool      `json:"stream"`
+	DoneReason string    `json:"done_reason"`
+	Done       bool      `json:"done"`
+}
 
 type Worker struct {
 	Host     host.Host
@@ -51,8 +77,52 @@ func NewWorker(ctx context.Context) (*Worker, error) {
 		input := string(buf[:n])
 		log.Printf("Worker received inference request (%d bytes): %s", n, input)
 
-		// Process the input and generate response
-		output := "hardcoded output from worker for input: " + input + "\n"
+		// Prepare Ollama API request
+		ollamaReq := OllamaRequest{
+			Model: "tinyllama",
+			Messages: []Message{
+				{
+					Role:    "user",
+					Content: input,
+				},
+			},
+			Stream: false,
+		}
+
+		// Serialize request to JSON
+		reqBody, err := json.Marshal(ollamaReq)
+		if err != nil {
+			log.Printf("Failed to marshal Ollama request: %v", err)
+			return
+		}
+
+		// Make HTTP POST request to Ollama API
+		resp, err := http.Post("http://localhost:11434/api/chat", "application/json", bytes.NewBuffer(reqBody))
+		if err != nil {
+			log.Printf("Failed to make HTTP request to Ollama: %v", err)
+			return
+		}
+		defer resp.Body.Close()
+
+		// Read response body
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("Failed to read Ollama response: %v", err)
+			return
+		}
+
+		// Parse Ollama response
+		var ollamaResp OllamaResponse
+		if err := json.Unmarshal(respBody, &ollamaResp); err != nil {
+			log.Printf("Failed to unmarshal Ollama response: %v", err)
+			return
+		}
+
+		// Extract the response content
+		output := ollamaResp.Message.Content
+		if output == "" {
+			output = "No response content received from Ollama"
+		}
 
 		// Write the response
 		responseBytes := []byte(output)
