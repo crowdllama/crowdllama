@@ -25,7 +25,8 @@ var (
 const (
 	// defaultBootstrapPeerAddr is the default bootstrap peer address for the DHT:
 	// TODO: allow CLI to pass custom peers
-	defaultBootstrapPeerAddr = "/ip4/192.168.0.15/tcp/9000/p2p/12D3KooWJzvh2T7Htr1Dr86batqcAf4c5wB8D16zfkM2xJFpoahy"
+	// defaultBootstrapPeerAddr = "/ip4/192.168.0.17/tcp/9000/p2p/12D3KooWJzvh2T7Htr1Dr86batqcAf4c5wB8D16zfkM2xJFpoahy"
+	defaultBootstrapPeerAddr = "/ip4/192.168.0.17/tcp/9000/p2p/12D3KooWHo5iPUc5a2kjfVpXangP3HsyqZoVGmCN3YmgpDiJMXqA"
 	// hardcoded dns bootstrap dht:
 	// defaultBootstrapPeerAddr = "/dns4/dht.crowdllama.com/tcp/9000/p2p/12D3KooWJB3rAu12osvuqJDo2ncCN8VqQmVkecwgDxxu1AN7fmeR"
 )
@@ -47,9 +48,7 @@ func NewHostAndDHT(ctx context.Context) (host.Host, *dht.IpfsDHT, error) {
 
 // BootstrapDHT connects to bootstrap peers. If customPeers is nil, use a local bootstrap address for fast local discovery.
 func BootstrapDHT(ctx context.Context, h host.Host, kadDHT *dht.IpfsDHT) error {
-	fmt.Println("BootstrapDHT is called")
 	var bootstrapPeers []peer.AddrInfo
-	fmt.Println("Use harcoded default bootstrap peer addr")
 	addr, err := multiaddr.NewMultiaddr(defaultBootstrapPeerAddr)
 	if err == nil {
 		peerInfo, err := peer.AddrInfoFromP2pAddr(addr)
@@ -65,7 +64,6 @@ func BootstrapDHT(ctx context.Context, h host.Host, kadDHT *dht.IpfsDHT) error {
 		bootstrapPeers = dht.GetDefaultBootstrapPeerAddrInfos()
 	}
 	for _, peerInfo := range bootstrapPeers {
-		fmt.Printf("%+v\n", peerInfo)
 		if err := h.Connect(ctx, peerInfo); err != nil {
 			log.Printf("Failed to connect to bootstrap %s: %v", peerInfo.ID, err)
 		} else {
