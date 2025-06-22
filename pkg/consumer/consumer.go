@@ -10,6 +10,7 @@ import (
 
 	"github.com/ipfs/go-cid"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/matiasinsaurralde/crowdllama/internal/discovery"
@@ -70,8 +71,8 @@ type workerInfo struct {
 	LastSeen time.Time
 }
 
-func NewConsumer(ctx context.Context, logger *zap.Logger) (*Consumer, error) {
-	h, kadDHT, err := discovery.NewHostAndDHT(ctx)
+func NewConsumer(ctx context.Context, logger *zap.Logger, privKey crypto.PrivKey) (*Consumer, error) {
+	h, kadDHT, err := discovery.NewHostAndDHT(ctx, privKey)
 	if err != nil {
 		return nil, err
 	}

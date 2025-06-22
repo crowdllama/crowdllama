@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/matiasinsaurralde/crowdllama/internal/keys"
 	"github.com/matiasinsaurralde/crowdllama/pkg/config"
 	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
 	"github.com/matiasinsaurralde/crowdllama/pkg/worker"
@@ -50,10 +51,29 @@ func main() {
 
 		logger.Info("Starting crowdllama worker")
 
+		// Determine key path
+		keyPath := cfg.KeyPath
+		if keyPath == "" {
+			defaultPath, err := keys.GetDefaultKeyPath("worker")
+			if err != nil {
+				logger.Fatal("Failed to get default key path", zap.Error(err))
+			}
+			keyPath = defaultPath
+		}
+
+		// Initialize key manager
+		keyManager := keys.NewKeyManager(keyPath, logger)
+
+		// Get or create private key
+		privKey, err := keyManager.GetOrCreatePrivateKey()
+		if err != nil {
+			logger.Fatal("Failed to get or create private key", zap.Error(err))
+		}
+
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		w, err := worker.NewWorker(ctx)
+		w, err := worker.NewWorker(ctx, privKey)
 		if err != nil {
 			logger.Fatal("Failed to initialize worker", zap.Error(err))
 		}

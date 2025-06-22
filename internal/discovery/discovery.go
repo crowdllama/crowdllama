@@ -12,6 +12,7 @@ import (
 	"github.com/ipfs/go-cid"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
@@ -29,14 +30,16 @@ const (
 	// defaultBootstrapPeerAddr is the default bootstrap peer address for the DHT:
 	// TODO: allow CLI to pass custom peers
 	// defaultBootstrapPeerAddr = "/ip4/192.168.0.17/tcp/9000/p2p/12D3KooWJzvh2T7Htr1Dr86batqcAf4c5wB8D16zfkM2xJFpoahy"
-	defaultBootstrapPeerAddr = "/ip4/192.168.0.17/tcp/9000/p2p/12D3KooWHo5iPUc5a2kjfVpXangP3HsyqZoVGmCN3YmgpDiJMXqA"
+	defaultBootstrapPeerAddr = "/ip4/192.168.0.15/tcp/9000/p2p/12D3KooWLLUBEZhkEq6NtTLD99RRpEYdcbe8uzx3L56UgF5VK4bw"
 	// hardcoded dns bootstrap dht:
 	// defaultBootstrapPeerAddr = "/dns4/dht.crowdllama.com/tcp/9000/p2p/12D3KooWJB3rAu12osvuqJDo2ncCN8VqQmVkecwgDxxu1AN7fmeR"
 )
 
 // NewHostAndDHT creates a libp2p host with DHT
-func NewHostAndDHT(ctx context.Context) (host.Host, *dht.IpfsDHT, error) {
-	h, err := libp2p.New()
+func NewHostAndDHT(ctx context.Context, privKey crypto.PrivKey) (host.Host, *dht.IpfsDHT, error) {
+	h, err := libp2p.New(
+		libp2p.Identity(privKey),
+	)
 	if err != nil {
 		return nil, nil, err
 	}

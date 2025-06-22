@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/matiasinsaurralde/crowdllama/internal/keys"
 	"github.com/matiasinsaurralde/crowdllama/pkg/config"
 	"github.com/matiasinsaurralde/crowdllama/pkg/consumer"
 	"go.uber.org/zap"
@@ -52,10 +53,29 @@ func main() {
 
 		logger.Info("Starting CrowdLlama consumer")
 
+		// Determine key path
+		keyPath := cfg.KeyPath
+		if keyPath == "" {
+			defaultPath, err := keys.GetDefaultKeyPath("consumer")
+			if err != nil {
+				logger.Fatal("Failed to get default key path", zap.Error(err))
+			}
+			keyPath = defaultPath
+		}
+
+		// Initialize key manager
+		keyManager := keys.NewKeyManager(keyPath, logger)
+
+		// Get or create private key
+		privKey, err := keyManager.GetOrCreatePrivateKey()
+		if err != nil {
+			logger.Fatal("Failed to get or create private key", zap.Error(err))
+		}
+
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		c, err := consumer.NewConsumer(ctx, logger)
+		c, err := consumer.NewConsumer(ctx, logger, privKey)
 		if err != nil {
 			logger.Fatal("Failed to initialize consumer", zap.Error(err))
 		}

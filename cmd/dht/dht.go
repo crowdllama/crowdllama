@@ -2,13 +2,11 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -20,6 +18,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/matiasinsaurralde/crowdllama/internal/discovery"
+	"github.com/matiasinsaurralde/crowdllama/internal/keys"
 	"github.com/matiasinsaurralde/crowdllama/pkg/config"
 	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
 	"github.com/multiformats/go-multiaddr"
@@ -41,82 +40,6 @@ func getWorkerNamespaceCID() cid.Cid {
 		panic("Failed to get namespace CID: " + err.Error())
 	}
 	return namespaceCID
-}
-
-// ensurePrivateKey ensures that a private key exists in $HOME/.crowdllama/dht.key
-// If it doesn't exist, it creates the directory and generates a new key
-func ensurePrivateKey(logger *zap.Logger) (crypto.PrivKey, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get home directory: %w", err)
-	}
-
-	crowdllamaDir := filepath.Join(homeDir, ".crowdllama")
-	keyPath := filepath.Join(crowdllamaDir, "dht.key")
-
-	// Check if the directory exists
-	if _, err := os.Stat(crowdllamaDir); os.IsNotExist(err) {
-		logger.Info("Creating CrowdLlama configuration directory", zap.String("path", crowdllamaDir))
-		if err := os.MkdirAll(crowdllamaDir, 0700); err != nil {
-			return nil, fmt.Errorf("failed to create directory %s: %w", crowdllamaDir, err)
-		}
-	}
-
-	// Check if the key file exists
-	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
-		logger.Info("Generating new DHT private key", zap.String("path", keyPath))
-
-		// Generate new private key
-		privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
-		if err != nil {
-			return nil, fmt.Errorf("failed to generate private key: %w", err)
-		}
-
-		// Save to disk
-		keyBytes, err := crypto.MarshalPrivateKey(privKey)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal private key: %w", err)
-		}
-
-		if err := os.WriteFile(keyPath, keyBytes, 0600); err != nil {
-			return nil, fmt.Errorf("failed to write private key to %s: %w", keyPath, err)
-		}
-
-		logger.Info("Successfully generated and saved DHT private key",
-			zap.String("path", keyPath),
-			zap.String("peer_id", getPeerIDFromKey(privKey)))
-
-		return privKey, nil
-	}
-
-	// Load existing key
-	logger.Info("Loading existing DHT private key", zap.String("path", keyPath))
-
-	keyBytes, err := os.ReadFile(keyPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read private key from %s: %w", keyPath, err)
-	}
-
-	privKey, err := crypto.UnmarshalPrivateKey(keyBytes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal private key from %s: %w", keyPath, err)
-	}
-
-	logger.Info("Successfully loaded DHT private key",
-		zap.String("path", keyPath),
-		zap.String("peer_id", getPeerIDFromKey(privKey)))
-
-	return privKey, nil
-}
-
-// getPeerIDFromKey extracts the peer ID from a private key for logging
-func getPeerIDFromKey(privKey crypto.PrivKey) string {
-	pubKey := privKey.GetPublic()
-	peerID, err := peer.IDFromPublicKey(pubKey)
-	if err != nil {
-		return "unknown"
-	}
-	return peerID.String()
 }
 
 // requestWorkerMetadata requests metadata from a worker peer
@@ -147,10 +70,23 @@ func main() {
 
 	logger.Info("Starting DHT server")
 
-	// Ensure private key exists or load existing one
-	privKey, err := ensurePrivateKey(logger)
+	// Determine key path
+	keyPath := cfg.KeyPath
+	if keyPath == "" {
+		defaultPath, err := keys.GetDefaultKeyPath("dht")
+		if err != nil {
+			logger.Fatal("Failed to get default key path", zap.Error(err))
+		}
+		keyPath = defaultPath
+	}
+
+	// Initialize key manager
+	keyManager := keys.NewKeyManager(keyPath, logger)
+
+	// Get or create private key
+	privKey, err := keyManager.GetOrCreatePrivateKey()
 	if err != nil {
-		logger.Fatal("Failed to ensure private key", zap.Error(err))
+		logger.Fatal("Failed to get or create private key", zap.Error(err))
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

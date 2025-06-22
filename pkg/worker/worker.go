@@ -12,6 +12,7 @@ import (
 
 	"github.com/ipfs/go-cid"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/matiasinsaurralde/crowdllama/internal/discovery"
@@ -48,8 +49,8 @@ type Worker struct {
 	Metadata *crowdllama.CrowdLlamaResource
 }
 
-func NewWorker(ctx context.Context) (*Worker, error) {
-	h, kadDHT, err := discovery.NewHostAndDHT(ctx)
+func NewWorker(ctx context.Context, privKey crypto.PrivKey) (*Worker, error) {
+	h, kadDHT, err := discovery.NewHostAndDHT(ctx, privKey)
 	if err != nil {
 		return nil, err
 	}

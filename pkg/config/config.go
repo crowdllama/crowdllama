@@ -20,6 +20,7 @@ type ConsumerCfg struct {
 // Configuration is the main configuration structure that embeds worker and consumer configs
 type Configuration struct {
 	Verbose bool
+	KeyPath string // Path to the private key file
 	Logger  *zap.Logger
 	WorkerCfg
 	ConsumerCfg
@@ -29,12 +30,14 @@ type Configuration struct {
 func NewConfiguration() *Configuration {
 	return &Configuration{
 		Verbose: false,
+		KeyPath: "", // Will be set to default if not provided
 	}
 }
 
 // ParseFlags parses command line flags and updates the configuration
 func (cfg *Configuration) ParseFlags(flagSet *flag.FlagSet) {
 	flagSet.BoolVar(&cfg.Verbose, "verbose", false, "Enable verbose logging")
+	flagSet.StringVar(&cfg.KeyPath, "key", "", "Path to private key file (default: ~/.crowdllama/<component>.key)")
 }
 
 // IsVerbose returns true if verbose logging is enabled
