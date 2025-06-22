@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/matiasinsaurralde/crowdllama/pkg/config"
 	"github.com/matiasinsaurralde/crowdllama/pkg/consumer"
+	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
 	"go.uber.org/zap"
 )
 
@@ -55,21 +57,30 @@ func main() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		c, err := consumer.NewConsumer(ctx)
+		c, err := consumer.NewConsumer(ctx, logger)
 		if err != nil {
 			logger.Fatal("Failed to initialize consumer", zap.Error(err))
 		}
 		// c.ListKnownPeersLoop()
 
-		// Discover available workers
-		logger.Info("Discovering available workers")
-		workers, err := c.DiscoverWorkers(ctx)
-		if err != nil {
-			logger.Fatal("Failed to discover workers", zap.Error(err))
-		}
+		var workers []*crowdllama.CrowdLlamaResource
+		for {
+			time.Sleep(1 * time.Second)
+			// Discover available workers
+			logger.Info("Discovering available workers")
+			workers, err = c.DiscoverWorkers(ctx)
+			if err != nil {
+				// logger.Fatal("Failed to discover workers", zap.Error(err))
+				logger.Info("Failed to discover workers", zap.Error(err))
+				continue
+			}
 
-		if len(workers) == 0 {
-			logger.Fatal("No workers found. Make sure a worker is running.")
+			if len(workers) == 0 {
+				// logger.Fatal("No workers found. Make sure a worker is running.")
+				logger.Info("No workers found. Make sure a worker is running.")
+				continue
+			}
+			break
 		}
 
 		// Find the best worker for the task
