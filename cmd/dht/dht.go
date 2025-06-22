@@ -19,10 +19,10 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/matiasinsaurralde/crowdllama/internal/discovery"
 	"github.com/matiasinsaurralde/crowdllama/pkg/config"
 	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
 	"github.com/multiformats/go-multiaddr"
-	"github.com/multiformats/go-multihash"
 	"go.uber.org/zap"
 )
 
@@ -36,12 +36,11 @@ var (
 
 // getWorkerNamespaceCID generates the same namespace CID as the worker
 func getWorkerNamespaceCID() cid.Cid {
-	myNamespace := crowdllama.WorkerNamespace
-	mh, err := multihash.Sum([]byte(myNamespace), multihash.IDENTITY, -1)
+	namespaceCID, err := discovery.GetWorkerNamespaceCID()
 	if err != nil {
-		panic("Failed to create multihash: " + err.Error())
+		panic("Failed to get namespace CID: " + err.Error())
 	}
-	return cid.NewCidV1(cid.Raw, mh)
+	return namespaceCID
 }
 
 // ensurePrivateKey ensures that a private key exists in $HOME/.crowdllama/dht.key
@@ -122,56 +121,7 @@ func getPeerIDFromKey(privKey crypto.PrivKey) string {
 
 // requestWorkerMetadata requests metadata from a worker peer
 func requestWorkerMetadata(ctx context.Context, h host.Host, workerPeer peer.ID, logger *zap.Logger) (*crowdllama.CrowdLlamaResource, error) {
-	logger.Debug("Opening stream to worker for metadata request",
-		zap.String("worker_peer_id", workerPeer.String()),
-		zap.String("protocol", crowdllama.MetadataProtocol))
-
-	// Open a stream to the worker
-	stream, err := h.NewStream(ctx, workerPeer, crowdllama.MetadataProtocol)
-	if err != nil {
-		logger.Error("Failed to open stream to worker",
-			zap.String("worker_peer_id", workerPeer.String()),
-			zap.Error(err))
-		return nil, fmt.Errorf("failed to open stream to worker: %w", err)
-	}
-	defer stream.Close()
-
-	// Set a read deadline
-	stream.SetReadDeadline(time.Now().Add(5 * time.Second))
-
-	logger.Debug("Reading metadata response from worker",
-		zap.String("worker_peer_id", workerPeer.String()))
-
-	// Read the metadata response
-	buf := make([]byte, 4096)
-	n, err := stream.Read(buf)
-	if err != nil {
-		logger.Error("Failed to read metadata from worker",
-			zap.String("worker_peer_id", workerPeer.String()),
-			zap.Error(err))
-		return nil, fmt.Errorf("failed to read metadata from worker: %w", err)
-	}
-
-	logger.Debug("Parsing metadata response",
-		zap.String("worker_peer_id", workerPeer.String()),
-		zap.Int("bytes_read", n))
-
-	// Parse the metadata
-	metadata, err := crowdllama.FromJSON(buf[:n])
-	if err != nil {
-		logger.Error("Failed to parse metadata from worker",
-			zap.String("worker_peer_id", workerPeer.String()),
-			zap.Error(err))
-		return nil, fmt.Errorf("failed to parse metadata from worker: %w", err)
-	}
-
-	logger.Debug("Successfully retrieved metadata from worker",
-		zap.String("worker_peer_id", workerPeer.String()),
-		zap.String("gpu_model", metadata.GPUModel),
-		zap.Int("vram_gb", metadata.VRAMGB),
-		zap.Float64("tokens_throughput", metadata.TokensThroughput))
-
-	return metadata, nil
+	return discovery.RequestWorkerMetadata(ctx, h, workerPeer, logger)
 }
 
 func main() {

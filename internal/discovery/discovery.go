@@ -14,7 +14,10 @@ import (
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
 	"github.com/multiformats/go-multiaddr"
+	"github.com/multiformats/go-multihash"
+	"go.uber.org/zap"
 )
 
 var (
@@ -104,4 +107,141 @@ func WaitForShutdown() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
+}
+
+// GetWorkerNamespaceCID generates the CID for worker discovery namespace
+func GetWorkerNamespaceCID() (cid.Cid, error) {
+	namespace := crowdllama.WorkerNamespace
+	mh, err := multihash.Sum([]byte(namespace), multihash.IDENTITY, -1)
+	if err != nil {
+		return cid.Undef, fmt.Errorf("failed to create multihash for namespace: %w", err)
+	}
+	return cid.NewCidV1(cid.Raw, mh), nil
+}
+
+// RequestWorkerMetadata retrieves metadata from a worker peer using the metadata protocol
+func RequestWorkerMetadata(ctx context.Context, h host.Host, workerPeer peer.ID, logger *zap.Logger) (*crowdllama.CrowdLlamaResource, error) {
+	logger.Debug("Opening stream to worker for metadata request",
+		zap.String("worker_peer_id", workerPeer.String()),
+		zap.String("protocol", crowdllama.MetadataProtocol))
+
+	// Open a stream to the worker
+	stream, err := h.NewStream(ctx, workerPeer, crowdllama.MetadataProtocol)
+	if err != nil {
+		logger.Error("Failed to open stream to worker",
+			zap.String("worker_peer_id", workerPeer.String()),
+			zap.Error(err))
+		return nil, fmt.Errorf("failed to open stream to worker: %w", err)
+	}
+	defer stream.Close()
+
+	// Set a read deadline
+	stream.SetReadDeadline(time.Now().Add(5 * time.Second))
+
+	logger.Debug("Reading metadata response from worker",
+		zap.String("worker_peer_id", workerPeer.String()))
+
+	// Read the metadata response - read all available data until EOF
+	var metadataJSON []byte
+	buf := make([]byte, 1024)
+	totalRead := 0
+
+	for {
+		n, err := stream.Read(buf)
+		if n > 0 {
+			metadataJSON = append(metadataJSON, buf[:n]...)
+			totalRead += n
+			logger.Debug("Read bytes from metadata stream",
+				zap.String("worker_peer_id", workerPeer.String()),
+				zap.Int("bytes_read", n),
+				zap.Int("total_read", totalRead))
+		}
+		if err != nil {
+			if err.Error() == "EOF" {
+				logger.Debug("Received EOF from metadata stream",
+					zap.String("worker_peer_id", workerPeer.String()),
+					zap.Int("total_bytes_read", totalRead))
+				break // EOF reached, we're done reading
+			}
+			logger.Error("Failed to read metadata from worker",
+				zap.String("worker_peer_id", workerPeer.String()),
+				zap.Error(err))
+			return nil, fmt.Errorf("failed to read metadata from worker: %w", err)
+		}
+	}
+
+	if len(metadataJSON) == 0 {
+		return nil, fmt.Errorf("no metadata received from worker")
+	}
+
+	logger.Debug("Parsing metadata response",
+		zap.String("worker_peer_id", workerPeer.String()),
+		zap.Int("metadata_length", len(metadataJSON)))
+
+	// Parse the metadata
+	metadata, err := crowdllama.FromJSON(metadataJSON)
+	if err != nil {
+		logger.Error("Failed to parse metadata from worker",
+			zap.String("worker_peer_id", workerPeer.String()),
+			zap.Error(err))
+		return nil, fmt.Errorf("failed to parse metadata from worker: %w", err)
+	}
+
+	logger.Debug("Successfully retrieved metadata from worker",
+		zap.String("worker_peer_id", workerPeer.String()),
+		zap.String("gpu_model", metadata.GPUModel),
+		zap.Int("vram_gb", metadata.VRAMGB),
+		zap.Float64("tokens_throughput", metadata.TokensThroughput))
+
+	return metadata, nil
+}
+
+// DiscoverWorkers finds workers advertising the namespace and retrieves their metadata
+func DiscoverWorkers(ctx context.Context, dht *dht.IpfsDHT, logger *zap.Logger) ([]*crowdllama.CrowdLlamaResource, error) {
+	var workers []*crowdllama.CrowdLlamaResource
+
+	// Get the namespace CID
+	namespaceCID, err := GetWorkerNamespaceCID()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get namespace CID: %w", err)
+	}
+
+	logger.Info("Searching for workers with namespace CID",
+		zap.String("namespace", crowdllama.WorkerNamespace),
+		zap.String("cid", namespaceCID.String()))
+
+	// Find providers for the namespace CID
+	providers := dht.FindProvidersAsync(ctx, namespaceCID, 10)
+
+	for provider := range providers {
+		logger.Info("Found worker provider", zap.String("peer_id", provider.ID.String()))
+
+		// Give the worker a moment to set up handlers
+		time.Sleep(100 * time.Millisecond)
+
+		// Request metadata from the worker
+		metadata, err := RequestWorkerMetadata(ctx, dht.Host(), provider.ID, logger)
+		if err != nil {
+			logger.Warn("Failed to get metadata from worker",
+				zap.String("peer_id", provider.ID.String()),
+				zap.Error(err))
+			continue
+		}
+
+		// Verify the metadata is recent (within last hour)
+		if time.Since(metadata.LastUpdated) > 1*time.Hour {
+			logger.Warn("Metadata from worker is too old, skipping",
+				zap.String("peer_id", provider.ID.String()),
+				zap.Time("last_updated", metadata.LastUpdated))
+			continue
+		}
+
+		workers = append(workers, metadata)
+		logger.Info("Found worker",
+			zap.String("peer_id", provider.ID.String()),
+			zap.String("gpu_model", metadata.GPUModel),
+			zap.Strings("supported_models", metadata.SupportedModels))
+	}
+
+	return workers, nil
 }

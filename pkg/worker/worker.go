@@ -153,22 +153,21 @@ func (w *Worker) AdvertiseModel(ctx context.Context, namespace string) {
 		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
 
-		// Generate a CID from the namespace string
-		mh, err := multihash.Sum([]byte(namespace), multihash.IDENTITY, -1)
+		// Get the namespace CID using the unified function
+		namespaceCID, err := discovery.GetWorkerNamespaceCID()
 		if err != nil {
-			panic("Failed to create multihash for namespace: " + err.Error())
+			panic("Failed to get namespace CID: " + err.Error())
 		}
-		cid := cid.NewCidV1(cid.Raw, mh)
 
 		for {
 			select {
 			case <-ticker.C:
 				// Advertise the worker using Provide
-				err := w.DHT.Provide(ctx, cid, true)
+				err := w.DHT.Provide(ctx, namespaceCID, true)
 				if err != nil {
 					log.Printf("Failed to advertise worker: %v", err)
 				} else {
-					log.Printf("Worker advertised with CID: %s", cid.String())
+					log.Printf("Worker advertised with CID: %s", namespaceCID.String())
 				}
 			case <-ctx.Done():
 				return
