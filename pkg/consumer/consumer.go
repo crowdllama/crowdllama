@@ -214,67 +214,6 @@ func (c *Consumer) handleChat(w http.ResponseWriter, r *http.Request) {
 	c.sendJSONResponse(w, generateResponse, http.StatusOK)
 }
 
-// handleGenerate handles the /api/generate endpoint
-func (c *Consumer) handleGenerate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Parse the request
-	var req GenerateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		c.logger.Error("Failed to decode request", zap.Error(err))
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
-		return
-	}
-
-	// Validate the request
-	if req.Model == "" {
-		http.Error(w, "Model is required", http.StatusBadRequest)
-		return
-	}
-	if len(req.Messages) == 0 {
-		http.Error(w, "No messages provided", http.StatusBadRequest)
-		return
-	}
-
-	c.logger.Info("Processing generate request",
-		zap.String("model", req.Model),
-		zap.Any("mesagess", req.Messages),
-		zap.Bool("stream", req.Stream))
-
-	// Find the best worker for the model
-	ctx := r.Context()
-	bestWorker, err := c.FindBestWorker(ctx, req.Model)
-	if err != nil {
-		c.logger.Error("Failed to find suitable worker", zap.Error(err))
-		response := GenerateResponse{
-			Model: req.Model,
-		}
-		c.sendJSONResponse(w, response, http.StatusServiceUnavailable)
-		return
-	}
-
-	// Request inference from the worker
-	_, err = c.RequestInference(ctx, bestWorker.PeerID, req.Messages[0].Content)
-	if err != nil {
-		c.logger.Error("Failed to request inference", zap.Error(err))
-		response := GenerateResponse{
-			Model: req.Model,
-		}
-		c.sendJSONResponse(w, response, http.StatusInternalServerError)
-		return
-	}
-
-	// Send successful response
-	generateResponse := GenerateResponse{
-		Model: req.Model,
-	}
-
-	c.sendJSONResponse(w, generateResponse, http.StatusOK)
-}
-
 // sendJSONResponse sends a JSON response with the specified status code
 func (c *Consumer) sendJSONResponse(w http.ResponseWriter, response interface{}, statusCode int) {
 	w.Header().Set("Content-Type", "application/json")
