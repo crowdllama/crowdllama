@@ -1,9 +1,11 @@
 package keys
 
 import (
+	"bytes"
 	"crypto/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/libp2p/go-libp2p/core/crypto"
@@ -53,7 +55,7 @@ func TestGetDefaultKeyPath(t *testing.T) {
 			}
 
 			// Check that the path contains the .crowdllama directory
-			if !filepath.HasPrefix(path, filepath.Join(os.Getenv("HOME"), DefaultKeyDir)) {
+			if !strings.HasPrefix(path, filepath.Join(os.Getenv("HOME"), DefaultKeyDir)) {
 				t.Errorf("Expected path to be in .crowdllama directory, got %s", path)
 			}
 		})
@@ -79,7 +81,7 @@ func TestGetOrCreatePrivateKey_NewKey(t *testing.T) {
 	}
 
 	// Verify the key file was created
-	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
+	if _, statErr := os.Stat(keyPath); os.IsNotExist(statErr) {
 		t.Error("Expected key file to be created")
 	}
 
@@ -100,7 +102,7 @@ func TestGetOrCreatePrivateKey_NewKey(t *testing.T) {
 		t.Fatalf("Failed to marshal loaded key: %v", err)
 	}
 
-	if string(keyBytes1) != string(keyBytes2) {
+	if !bytes.Equal(keyBytes1, keyBytes2) {
 		t.Error("Loaded key does not match original key")
 	}
 }
@@ -140,7 +142,7 @@ func TestGetOrCreatePrivateKey_ExistingKey(t *testing.T) {
 		t.Fatalf("Failed to marshal loaded key: %v", err)
 	}
 
-	if string(keyBytes1) != string(keyBytes2) {
+	if !bytes.Equal(keyBytes1, keyBytes2) {
 		t.Error("Loaded key does not match original key")
 	}
 }
@@ -175,7 +177,7 @@ func TestLoadPrivateKey_InvalidKey(t *testing.T) {
 
 	// Create an invalid key file
 	invalidData := []byte("this is not a valid private key")
-	err := os.WriteFile(keyPath, invalidData, 0600)
+	err := os.WriteFile(keyPath, invalidData, 0o600)
 	if err != nil {
 		t.Fatalf("Failed to write invalid key file: %v", err)
 	}
@@ -307,8 +309,8 @@ func TestKeyManager_FilePermissions(t *testing.T) {
 
 	// Check that the file has restrictive permissions (0600)
 	mode := info.Mode()
-	if mode&0777 != 0600 {
-		t.Errorf("Expected file permissions 0600, got %o", mode&0777)
+	if mode&0o777 != 0o600 {
+		t.Errorf("Expected file permissions 0600, got %o", mode&0o777)
 	}
 
 	// Note: We don't test directory permissions here because t.TempDir() creates

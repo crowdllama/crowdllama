@@ -1,3 +1,4 @@
+// Package main provides the worker command for CrowdLlama.
 package main
 
 import (
@@ -36,14 +37,21 @@ func main() {
 		cfg := config.NewConfiguration()
 		cfg.ParseFlags(startCmd)
 
-		startCmd.Parse(os.Args[2:])
+		if err := startCmd.Parse(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to parse args: %v\n", err)
+			os.Exit(1)
+		}
 
 		// Setup logger
 		if err := cfg.SetupLogger(); err != nil {
 			log.Fatalf("Failed to setup logger: %v", err)
 		}
 		logger := cfg.GetLogger()
-		defer logger.Sync()
+		defer func() {
+			if err := logger.Sync(); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to sync logger: %v\n", err)
+			}
+		}()
 
 		if cfg.IsVerbose() {
 			logger.Info("Verbose mode enabled")
@@ -71,12 +79,13 @@ func main() {
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
 
 		w, err := worker.NewWorker(ctx, privKey)
 		if err != nil {
-			logger.Fatal("Failed to initialize worker", zap.Error(err))
+			fmt.Fprintf(os.Stderr, "failed to start worker: %v\n", err)
+			os.Exit(1)
 		}
+		defer cancel()
 		logger.Info("Worker initialized", zap.String("peer_id", w.Host.ID().String()))
 
 		// Set up metadata handler

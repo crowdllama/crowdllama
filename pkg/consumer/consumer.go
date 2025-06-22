@@ -1,3 +1,4 @@
+// Package consumer provides the consumer functionality for CrowdLlama.
 package consumer
 
 import (
@@ -19,13 +20,17 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	InferenceProtocol = "/crowdllama/inference/1.0.0"
-	DefaultHTTPPort   = 9001
-	// Discovery intervals
-	DiscoveryInterval = 5 * time.Second  // Reduced from previous intervals
-	WorkerMapTimeout  = 30 * time.Second // How long to keep workers in map
-)
+// InferenceProtocol is the protocol identifier for inference requests
+const InferenceProtocol = "/crowdllama/inference/1.0.0"
+
+// DefaultHTTPPort is the default HTTP port for the consumer
+const DefaultHTTPPort = 9001
+
+// DiscoveryInterval is the interval for worker discovery
+const DiscoveryInterval = 10 * time.Second
+
+// WorkerMapTimeout is how long to keep workers in the map
+const WorkerMapTimeout = 30 * time.Second
 
 // GenerateRequest represents the JSON request structure for the /api/generate endpoint
 type GenerateRequest struct {
@@ -34,6 +39,7 @@ type GenerateRequest struct {
 	Stream   bool      `json:"stream"`
 }
 
+// Message represents a message sent between consumer and worker
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
@@ -52,32 +58,33 @@ type GenerateResponse struct {
 	// Error     string    `json:"error,omitempty"`
 }
 
+// Consumer handles inference requests and worker discovery
 type Consumer struct {
-	Host   host.Host
-	DHT    *dht.IpfsDHT
-	logger *zap.Logger
-	server *http.Server
-
-	// Worker discovery state
-	workersMutex    sync.RWMutex
+	Host            host.Host
+	DHT             *dht.IpfsDHT
+	server          *http.Server
+	logger          *zap.Logger
+	Resource        *crowdllama.Resource
 	workers         map[string]*workerInfo
+	workersMutex    sync.RWMutex
 	discoveryCtx    context.Context
 	discoveryCancel context.CancelFunc
 }
 
 // workerInfo holds worker metadata with timestamp for cleanup
 type workerInfo struct {
-	Resource *crowdllama.CrowdLlamaResource
+	Resource *crowdllama.Resource
 	LastSeen time.Time
 }
 
+// NewConsumer creates a new consumer instance
 func NewConsumer(ctx context.Context, logger *zap.Logger, privKey crypto.PrivKey) (*Consumer, error) {
 	h, kadDHT, err := discovery.NewHostAndDHT(ctx, privKey)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("new host and DHT: %w", err)
 	}
 	if err := discovery.BootstrapDHT(ctx, h, kadDHT); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("bootstrap DHT: %w", err)
 	}
 
 	discoveryCtx, discoveryCancel := context.WithCancel(ctx)
@@ -105,12 +112,16 @@ func (c *Consumer) StartHTTPServer(port int) error {
 	loggedMux := c.loggingMiddleware(mux)
 
 	c.server = &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
-		Handler: loggedMux,
+		Addr:              fmt.Sprintf(":%d", port),
+		Handler:           loggedMux,
+		ReadHeaderTimeout: 30 * time.Second,
 	}
 
 	c.logger.Info("Starting HTTP server", zap.Int("port", port))
-	return c.server.ListenAndServe()
+	if err := c.server.ListenAndServe(); err != nil {
+		return fmt.Errorf("listen and serve: %w", err)
+	}
+	return nil
 }
 
 // loggingMiddleware wraps the HTTP handler to log all requests
@@ -156,14 +167,20 @@ func (rw *responseWriter) WriteHeader(code int) {
 }
 
 func (rw *responseWriter) Write(b []byte) (int, error) {
-	return rw.ResponseWriter.Write(b)
+	n, err := rw.ResponseWriter.Write(b)
+	if err != nil {
+		return n, fmt.Errorf("write response: %w", err)
+	}
+	return n, nil
 }
 
 // StopHTTPServer gracefully stops the HTTP server
 func (c *Consumer) StopHTTPServer(ctx context.Context) error {
 	if c.server != nil {
 		c.logger.Info("Stopping HTTP server")
-		return c.server.Shutdown(ctx)
+		if err := c.server.Shutdown(ctx); err != nil {
+			return fmt.Errorf("shutdown server: %w", err)
+		}
 	}
 	return nil
 }
@@ -247,7 +264,7 @@ func (c *Consumer) sendJSONResponse(w http.ResponseWriter, response interface{},
 }
 
 // RequestInference sends a string task to a worker and waits for a response
-func (c *Consumer) RequestInference(ctx context.Context, workerID string, input string) (string, error) {
+func (c *Consumer) RequestInference(ctx context.Context, workerID, input string) (string, error) {
 	fmt.Println("*** RequestInference is called")
 	pid, err := peer.Decode(workerID)
 	if err != nil {
@@ -262,7 +279,11 @@ func (c *Consumer) RequestInference(ctx context.Context, workerID string, input 
 	if err != nil {
 		return "", fmt.Errorf("failed to open stream: %w", err)
 	}
-	defer stream.Close()
+	defer func() {
+		if closeErr := stream.Close(); closeErr != nil {
+			c.logger.Warn("failed to close stream", zap.Error(closeErr))
+		}
+	}()
 
 	c.logger.Debug("Writing input to stream", zap.String("input", input))
 	_, err = stream.Write([]byte(input))
@@ -303,6 +324,7 @@ func (c *Consumer) ListenForResponses() {
 	// Not needed for this simple request/response model
 }
 
+// ListKnownPeersLoop continuously lists known peers for debugging
 func (c *Consumer) ListKnownPeersLoop() {
 	go func() {
 		for {
@@ -316,24 +338,17 @@ func (c *Consumer) ListKnownPeersLoop() {
 	}()
 }
 
-// getWorkerMetadataKey generates the same DHT key as the worker
-func getWorkerMetadataKey(peerID string) string {
-	// Use a simple string key - the DHT might accept this format
-	return "crowdllama-worker-" + peerID
-}
-
 // DiscoverWorkers searches for available workers in the DHT
-func (c *Consumer) DiscoverWorkers(ctx context.Context) ([]*crowdllama.CrowdLlamaResource, error) {
-	return discovery.DiscoverWorkers(ctx, c.DHT, c.logger)
-}
-
-// getMetadataFromPeer retrieves metadata from a specific peer using the metadata protocol
-func (c *Consumer) getMetadataFromPeer(ctx context.Context, peerID peer.ID) (*crowdllama.CrowdLlamaResource, error) {
-	return discovery.RequestWorkerMetadata(ctx, c.Host, peerID, c.logger)
+func (c *Consumer) DiscoverWorkers(ctx context.Context) ([]*crowdllama.Resource, error) {
+	workers, err := discovery.DiscoverWorkers(ctx, c.DHT, c.logger)
+	if err != nil {
+		return nil, fmt.Errorf("discover workers: %w", err)
+	}
+	return workers, nil
 }
 
 // FindBestWorker finds the best available worker based on criteria
-func (c *Consumer) FindBestWorker(ctx context.Context, requiredModel string) (*crowdllama.CrowdLlamaResource, error) {
+func (c *Consumer) FindBestWorker(ctx context.Context, requiredModel string) (*crowdllama.Resource, error) {
 	// Try to find a worker from the cached map first
 	bestWorker := c.findBestWorkerFromCache(requiredModel)
 	if bestWorker != nil {
@@ -361,13 +376,13 @@ func (c *Consumer) FindBestWorker(ctx context.Context, requiredModel string) (*c
 		case <-timeout:
 			return nil, fmt.Errorf("timeout waiting for worker supporting model: %s", requiredModel)
 		case <-ctx.Done():
-			return nil, fmt.Errorf("context cancelled while waiting for worker: %w", ctx.Err())
+			return nil, fmt.Errorf("context canceled while waiting for worker: %w", ctx.Err())
 		}
 	}
 }
 
 // findBestWorkerFromCache finds the best worker from the cached worker map
-func (c *Consumer) findBestWorkerFromCache(requiredModel string) *crowdllama.CrowdLlamaResource {
+func (c *Consumer) findBestWorkerFromCache(requiredModel string) *crowdllama.Resource {
 	c.workersMutex.RLock()
 	defer c.workersMutex.RUnlock()
 
@@ -376,7 +391,7 @@ func (c *Consumer) findBestWorkerFromCache(requiredModel string) *crowdllama.Cro
 	}
 
 	// Find the best worker based on criteria
-	var bestWorker *crowdllama.CrowdLlamaResource
+	var bestWorker *crowdllama.Resource
 	var bestScore float64
 
 	for _, info := range c.workers {
@@ -412,12 +427,12 @@ func (c *Consumer) DiscoverWorkersViaProviders(ctx context.Context, namespace st
 	// Generate the same CID as the worker
 	mh, err := multihash.Sum([]byte(namespace), multihash.IDENTITY, -1)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create multihash: %w", err)
 	}
-	cid := cid.NewCidV1(cid.Raw, mh)
+	contentID := cid.NewCidV1(cid.Raw, mh)
 
-	providers := c.DHT.FindProvidersAsync(ctx, cid, 10)
-	var peers []peer.ID
+	providers := c.DHT.FindProvidersAsync(ctx, contentID, 10)
+	peers := make([]peer.ID, 0, 10) // Preallocate with capacity 10
 	for p := range providers {
 		peers = append(peers, p.ID)
 	}
@@ -516,11 +531,11 @@ func (c *Consumer) cleanupStaleWorkers() {
 }
 
 // GetAvailableWorkers returns a copy of the current worker map
-func (c *Consumer) GetAvailableWorkers() map[string]*crowdllama.CrowdLlamaResource {
+func (c *Consumer) GetAvailableWorkers() map[string]*crowdllama.Resource {
 	c.workersMutex.RLock()
 	defer c.workersMutex.RUnlock()
 
-	result := make(map[string]*crowdllama.CrowdLlamaResource)
+	result := make(map[string]*crowdllama.Resource)
 	for workerID, info := range c.workers {
 		result[workerID] = info.Resource
 	}

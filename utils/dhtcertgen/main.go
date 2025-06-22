@@ -1,3 +1,4 @@
+// Package main provides a utility for generating DHT certificates.
 package main
 
 import (
@@ -15,7 +16,7 @@ func main() {
 	}
 	// Save to disk
 	keyBytes, _ := crypto.MarshalPrivateKey(privKey)
-	if err := os.WriteFile("dht.key", keyBytes, 0600); err != nil {
+	if err := os.WriteFile("dht.key", keyBytes, 0o600); err != nil {
 		panic(err)
 	}
 }

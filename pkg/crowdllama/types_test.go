@@ -52,7 +52,7 @@ func TestToJSON(t *testing.T) {
 	}
 
 	// Verify it's valid JSON
-	var parsedResource CrowdLlamaResource
+	var parsedResource Resource
 	err = json.Unmarshal(jsonData, &parsedResource)
 	if err != nil {
 		t.Fatalf("Failed to unmarshal JSON: %v", err)

@@ -1,7 +1,9 @@
+// Package config provides configuration utilities for CrowdLlama.
 package config
 
 import (
 	"flag"
+	"fmt"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -62,7 +64,7 @@ func (cfg *Configuration) SetupLogger() error {
 	}
 
 	if err != nil {
-		return err
+		return fmt.Errorf("build zap logger: %w", err)
 	}
 
 	cfg.Logger = logger

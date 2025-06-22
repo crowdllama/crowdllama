@@ -1,3 +1,4 @@
+// Package keys provides key management utilities for CrowdLlama.
 package keys
 
 import (
@@ -5,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -20,6 +22,7 @@ const (
 type KeyManager struct {
 	keyPath string
 	logger  *zap.Logger
+	mu      sync.Mutex // Protect concurrent access to key creation
 }
 
 // NewKeyManager creates a new key manager
@@ -33,11 +36,14 @@ func NewKeyManager(keyPath string, logger *zap.Logger) *KeyManager {
 // GetOrCreatePrivateKey ensures that a private key exists at the specified path
 // If it doesn't exist, it creates the directory and generates a new key
 func (km *KeyManager) GetOrCreatePrivateKey() (crypto.PrivKey, error) {
+	km.mu.Lock()
+	defer km.mu.Unlock()
+
 	// Check if the directory exists
 	keyDir := filepath.Dir(km.keyPath)
 	if _, err := os.Stat(keyDir); os.IsNotExist(err) {
 		km.logger.Info("Creating key directory", zap.String("path", keyDir))
-		if err := os.MkdirAll(keyDir, 0700); err != nil {
+		if err := os.MkdirAll(keyDir, 0o700); err != nil {
 			return nil, fmt.Errorf("failed to create directory %s: %w", keyDir, err)
 		}
 	}
@@ -58,7 +64,7 @@ func (km *KeyManager) GetOrCreatePrivateKey() (crypto.PrivKey, error) {
 			return nil, fmt.Errorf("failed to marshal private key: %w", err)
 		}
 
-		if err := os.WriteFile(km.keyPath, keyBytes, 0600); err != nil {
+		if err := os.WriteFile(km.keyPath, keyBytes, 0o600); err != nil {
 			return nil, fmt.Errorf("failed to write private key to %s: %w", km.keyPath, err)
 		}
 

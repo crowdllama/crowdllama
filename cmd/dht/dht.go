@@ -1,3 +1,4 @@
+// Package main provides the DHT command for CrowdLlama.
 package main
 
 import (
@@ -25,13 +26,11 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
-	// defaultListenAddrs is the default listen addresses for the DHT:
-	defaultListenAddrs = []string{
-		"/ip4/0.0.0.0/tcp/9000",
-		"/ip4/0.0.0.0/udp/9000/quic-v1",
-	}
-)
+// defaultListenAddrs is the default listen addresses for the DHT:
+var defaultListenAddrs = []string{
+	"/ip4/0.0.0.0/tcp/9000",
+	"/ip4/0.0.0.0/udp/9000/quic-v1",
+}
 
 // getWorkerNamespaceCID generates the same namespace CID as the worker
 func getWorkerNamespaceCID() cid.Cid {
@@ -43,8 +42,12 @@ func getWorkerNamespaceCID() cid.Cid {
 }
 
 // requestWorkerMetadata requests metadata from a worker peer
-func requestWorkerMetadata(ctx context.Context, h host.Host, workerPeer peer.ID, logger *zap.Logger) (*crowdllama.CrowdLlamaResource, error) {
-	return discovery.RequestWorkerMetadata(ctx, h, workerPeer, logger)
+func requestWorkerMetadata(ctx context.Context, h host.Host, workerPeer peer.ID, logger *zap.Logger) (*crowdllama.Resource, error) {
+	metadata, err := discovery.RequestWorkerMetadata(ctx, h, workerPeer, logger)
+	if err != nil {
+		return nil, fmt.Errorf("request worker metadata: %w", err)
+	}
+	return metadata, nil
 }
 
 func main() {
@@ -55,14 +58,21 @@ func main() {
 	cfg := config.NewConfiguration()
 	cfg.ParseFlags(startCmd)
 
-	startCmd.Parse(os.Args[1:])
+	if err := startCmd.Parse(os.Args[1:]); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to parse args: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Setup logger
 	if err := cfg.SetupLogger(); err != nil {
 		log.Fatalf("Failed to setup logger: %v", err)
 	}
 	logger := cfg.GetLogger()
-	defer logger.Sync()
+	defer func() {
+		if err := logger.Sync(); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to sync logger: %v\n", err)
+		}
+	}()
 
 	if cfg.IsVerbose() {
 		logger.Info("Verbose mode enabled")
@@ -94,20 +104,21 @@ func main() {
 
 	h, kadDHT, err := newDHTServer(ctx, privKey, logger)
 	if err != nil {
-		logger.Fatal("Failed to start DHT server", zap.Error(err))
+		fmt.Fprintf(os.Stderr, "failed to start DHT: %v\n", err)
+		os.Exit(1)
 	}
 	printHostInfo(h, logger)
 
 	// Set up network notifier to detect new connections
 	h.Network().Notify(&network.NotifyBundle{
-		ConnectedF: func(n network.Network, conn network.Conn) {
+		ConnectedF: func(_ network.Network, conn network.Conn) {
 			peerID := conn.RemotePeer().String()
 			logger.Info("New peer connected",
 				zap.String("peer_id", peerID),
 				zap.String("remote_addr", conn.RemoteMultiaddr().String()),
 				zap.String("direction", conn.Stat().Direction.String()))
 		},
-		DisconnectedF: func(n network.Network, conn network.Conn) {
+		DisconnectedF: func(_ network.Network, conn network.Conn) {
 			logger.Info("Peer disconnected",
 				zap.String("peer_id", conn.RemotePeer().String()),
 				zap.String("remote_addr", conn.RemoteMultiaddr().String()))
@@ -136,14 +147,14 @@ func newDHTServer(ctx context.Context, privKey crypto.PrivKey, logger *zap.Logge
 	)
 	if err != nil {
 		logger.Error("Failed to create libp2p host", zap.Error(err))
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("create libp2p host: %w", err)
 	}
 
 	logger.Debug("Creating DHT instance", zap.String("mode", "server"))
 	kadDHT, err := dht.New(ctx, h, dht.Mode(dht.ModeServer))
 	if err != nil {
 		logger.Error("Failed to create DHT instance", zap.Error(err))
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("create DHT instance: %w", err)
 	}
 
 	logger.Info("DHT server created successfully",
@@ -172,7 +183,7 @@ func waitForShutdown(logger *zap.Logger) {
 	time.Sleep(1 * time.Second)
 }
 
-func discoverWorkersPeriodically(dht *dht.IpfsDHT, logger *zap.Logger) {
+func discoverWorkersPeriodically(kadDHT *dht.IpfsDHT, logger *zap.Logger) {
 	ticker := time.NewTicker(10 * time.Second) // Run every 10 seconds for testing
 	defer ticker.Stop()
 
@@ -185,7 +196,7 @@ func discoverWorkersPeriodically(dht *dht.IpfsDHT, logger *zap.Logger) {
 		logger.Debug("Searching for workers advertising namespace",
 			zap.String("namespace_cid", namespaceCID.String()))
 
-		providers := dht.FindProvidersAsync(context.Background(), namespaceCID, 10)
+		providers := kadDHT.FindProvidersAsync(context.Background(), namespaceCID, 10)
 		workerCount := 0
 
 		for provider := range providers {
@@ -195,7 +206,7 @@ func discoverWorkersPeriodically(dht *dht.IpfsDHT, logger *zap.Logger) {
 				zap.Strings("addresses", multiaddrsToStrings(provider.Addrs)))
 
 			// Request metadata from the worker
-			metadata, err := requestWorkerMetadata(context.Background(), dht.Host(), provider.ID, logger)
+			metadata, err := requestWorkerMetadata(context.Background(), kadDHT.Host(), provider.ID, logger)
 			if err != nil {
 				logger.Error("Failed to get metadata from worker",
 					zap.String("worker_peer_id", provider.ID.String()),

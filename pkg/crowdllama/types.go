@@ -1,3 +1,4 @@
+// Package crowdllama provides core types and utilities for the CrowdLlama system.
 package crowdllama
 
 import (
@@ -15,15 +16,15 @@ const (
 	// MetadataProtocol is the protocol for requesting worker metadata
 	MetadataProtocol = "/crowdllama/metadata/1.0.0"
 
-	// DHT key prefix for worker metadata
+	// WorkerMetadataPrefix is the DHT key prefix for worker metadata
 	WorkerMetadataPrefix = "/crowdllama/worker/"
 
 	// WorkerNamespace is the namespace used for worker discovery in the DHT
 	WorkerNamespace = "crowdllama-demo-namespace"
 )
 
-// CrowdLlamaResource represents worker metadata stored in the DHT
-type CrowdLlamaResource struct {
+// Resource represents a CrowdLlama resource (worker metadata)
+type Resource struct {
 	PeerID           string    `json:"peer_id"`
 	SupportedModels  []string  `json:"supported_models"`
 	TokensThroughput float64   `json:"tokens_throughput"` // tokens/sec
@@ -33,9 +34,9 @@ type CrowdLlamaResource struct {
 	LastUpdated      time.Time `json:"last_updated"`
 }
 
-// NewCrowdLlamaResource creates a new CrowdLlamaResource with default values
-func NewCrowdLlamaResource(peerID string) *CrowdLlamaResource {
-	return &CrowdLlamaResource{
+// NewCrowdLlamaResource creates a new resource with the given peer ID
+func NewCrowdLlamaResource(peerID string) *Resource {
+	return &Resource{
 		PeerID:           peerID,
 		SupportedModels:  []string{},
 		TokensThroughput: 0.0,
@@ -46,14 +47,18 @@ func NewCrowdLlamaResource(peerID string) *CrowdLlamaResource {
 	}
 }
 
-// ToJSON converts the resource to JSON bytes
-func (r *CrowdLlamaResource) ToJSON() ([]byte, error) {
-	return json.Marshal(r)
+// ToJSON serializes the resource to JSON
+func (r *Resource) ToJSON() ([]byte, error) {
+	data, err := json.Marshal(r)
+	if err != nil {
+		return nil, fmt.Errorf("marshal resource: %w", err)
+	}
+	return data, nil
 }
 
 // FromJSON creates a CrowdLlamaResource from JSON bytes
-func FromJSON(data []byte) (*CrowdLlamaResource, error) {
-	var resource CrowdLlamaResource
+func FromJSON(data []byte) (*Resource, error) {
+	var resource Resource
 	err := json.Unmarshal(data, &resource)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal CrowdLlamaResource: %w", err)
@@ -62,7 +67,7 @@ func FromJSON(data []byte) (*CrowdLlamaResource, error) {
 }
 
 // GetDHTKey returns the DHT key for this worker's metadata
-func (r *CrowdLlamaResource) GetDHTKey() string {
+func (r *Resource) GetDHTKey() string {
 	return "/ipns/" + r.PeerID
 }
 

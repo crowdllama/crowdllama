@@ -1,3 +1,4 @@
+// Package worker provides the worker functionality for CrowdLlama.
 package worker
 
 import (
@@ -28,6 +29,7 @@ type OllamaRequest struct {
 	Stream   bool      `json:"stream"`
 }
 
+// Message represents a message in the Ollama API
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
@@ -43,29 +45,36 @@ type OllamaResponse struct {
 	Done       bool      `json:"done"`
 }
 
+// Worker represents a CrowdLlama worker node
 type Worker struct {
 	Host     host.Host
 	DHT      *dht.IpfsDHT
-	Metadata *crowdllama.CrowdLlamaResource
+	Metadata *crowdllama.Resource
 }
 
+// NewWorker creates a new worker instance
 func NewWorker(ctx context.Context, privKey crypto.PrivKey) (*Worker, error) {
 	h, kadDHT, err := discovery.NewHostAndDHT(ctx, privKey)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("new host and DHT: %w", err)
 	}
 	if err := discovery.BootstrapDHT(ctx, h, kadDHT); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("bootstrap DHT: %w", err)
 	}
 
 	fmt.Println("BootstrapDHT ok")
 	h.SetStreamHandler(consumer.InferenceProtocol, func(s network.Stream) {
-		defer s.Close()
+		defer func() {
+			if err := s.Close(); err != nil {
+				log.Printf("failed to close stream: %v", err)
+			}
+		}()
 
 		fmt.Println("StreamHandler is called")
 
-		// Set a read deadline to avoid blocking indefinitely
-		s.SetReadDeadline(time.Now().Add(5 * time.Second))
+		if err := s.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			log.Printf("failed to set read deadline: %v", err)
+		}
 
 		// Read the input data with a fixed buffer
 		buf := make([]byte, 1024)
@@ -98,12 +107,23 @@ func NewWorker(ctx context.Context, privKey crypto.PrivKey) (*Worker, error) {
 		}
 
 		// Make HTTP POST request to Ollama API
-		resp, err := http.Post("http://localhost:11434/api/chat", "application/json", bytes.NewBuffer(reqBody))
+		req, err := http.NewRequestWithContext(ctx, "POST", "http://localhost:11434/api/chat", bytes.NewBuffer(reqBody))
+		if err != nil {
+			log.Printf("Failed to create HTTP request: %v", err)
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			log.Printf("Failed to make HTTP request to Ollama: %v", err)
 			return
 		}
-		defer resp.Body.Close()
+		defer func() {
+			if closeErr := resp.Body.Close(); closeErr != nil {
+				log.Printf("failed to close response body: %v", closeErr)
+			}
+		}()
 
 		// Read response body
 		respBody, err := io.ReadAll(resp.Body)
@@ -114,8 +134,8 @@ func NewWorker(ctx context.Context, privKey crypto.PrivKey) (*Worker, error) {
 
 		// Parse Ollama response
 		var ollamaResp OllamaResponse
-		if err := json.Unmarshal(respBody, &ollamaResp); err != nil {
-			log.Printf("Failed to unmarshal Ollama response: %v", err)
+		if unmarshalErr := json.Unmarshal(respBody, &ollamaResp); unmarshalErr != nil {
+			log.Printf("Failed to unmarshal Ollama response: %v", unmarshalErr)
 			return
 		}
 
@@ -157,7 +177,11 @@ func (w *Worker) SetupMetadataHandler() {
 	log.Printf("Setting up metadata handler for protocol: %s", crowdllama.MetadataProtocol)
 
 	w.Host.SetStreamHandler(crowdllama.MetadataProtocol, func(s network.Stream) {
-		defer s.Close()
+		defer func() {
+			if err := s.Close(); err != nil {
+				log.Printf("failed to close stream: %v", err)
+			}
+		}()
 		log.Printf("Worker received metadata request from %s", s.Conn().RemotePeer().String())
 
 		// Serialize metadata to JSON
@@ -219,7 +243,7 @@ func (w *Worker) PublishMetadata(ctx context.Context) error {
 }
 
 // AdvertiseModel periodically announces model availability and advertises the worker using Provide
-func (w *Worker) AdvertiseModel(ctx context.Context, namespace string) {
+func (w *Worker) AdvertiseModel(ctx context.Context, _ string) {
 	go func() {
 		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
@@ -247,6 +271,10 @@ func (w *Worker) AdvertiseModel(ctx context.Context, namespace string) {
 	}()
 }
 
+// BootstrapWithPeer bootstraps the worker's DHT with a peer
 func BootstrapWithPeer(ctx context.Context, w *Worker) error {
-	return discovery.BootstrapDHT(ctx, w.Host, w.DHT)
+	if err := discovery.BootstrapDHT(ctx, w.Host, w.DHT); err != nil {
+		return fmt.Errorf("bootstrap DHT: %w", err)
+	}
+	return nil
 }

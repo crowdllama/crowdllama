@@ -35,7 +35,9 @@ func TestParseFlags(t *testing.T) {
 	config.ParseFlags(flagSet)
 
 	// Parse the flags
-	flagSet.Parse(os.Args[1:])
+	if err := flagSet.Parse(os.Args[1:]); err != nil {
+		t.Fatalf("failed to parse flags: %v", err)
+	}
 
 	if !config.Verbose {
 		t.Error("Expected Verbose to be true after parsing -verbose flag")

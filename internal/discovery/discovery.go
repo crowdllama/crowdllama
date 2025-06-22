@@ -1,3 +1,4 @@
+// Package discovery provides peer and DHT discovery utilities for CrowdLlama.
 package discovery
 
 import (
@@ -21,16 +22,16 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
-	// advertiseInterval is the interval at which the model is advertised to the DHT:
-	advertiseInterval = 10 * time.Second
-)
+// advertiseInterval is the interval at which the model is advertised to the DHT:
+var advertiseInterval = 10 * time.Second
+
+var defaultListenAddrs = []string{"/ip4/0.0.0.0/tcp/0"}
 
 const (
 	// defaultBootstrapPeerAddr is the default bootstrap peer address for the DHT:
 	// TODO: allow CLI to pass custom peers
 	// defaultBootstrapPeerAddr = "/ip4/192.168.0.17/tcp/9000/p2p/12D3KooWJzvh2T7Htr1Dr86batqcAf4c5wB8D16zfkM2xJFpoahy"
-	defaultBootstrapPeerAddr = "/ip4/192.168.0.17/tcp/9000/p2p/12D3KooWPZuN1C3CkRzRXr34rCYZtBQAmcXa53HwCfQYeKD64TwF"
+	defaultBootstrapPeerAddr = "/ip4/192.168.0.15/tcp/9000/p2p/12D3KooWLLUBEZhkEq6NtTLD99RRpEYdcbe8uzx3L56UgF5VK4bw"
 	// hardcoded dns bootstrap dht:
 	// defaultBootstrapPeerAddr = "/dns4/dht.crowdllama.com/tcp/9000/p2p/12D3KooWJB3rAu12osvuqJDo2ncCN8VqQmVkecwgDxxu1AN7fmeR"
 )
@@ -38,15 +39,16 @@ const (
 // NewHostAndDHT creates a libp2p host with DHT
 func NewHostAndDHT(ctx context.Context, privKey crypto.PrivKey) (host.Host, *dht.IpfsDHT, error) {
 	h, err := libp2p.New(
+		libp2p.ListenAddrStrings(defaultListenAddrs...),
 		libp2p.Identity(privKey),
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("create libp2p host: %w", err)
 	}
 
 	kadDHT, err := dht.New(ctx, h, dht.Mode(dht.ModeServer))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("create DHT instance: %w", err)
 	}
 
 	return h, kadDHT, nil
@@ -76,11 +78,14 @@ func BootstrapDHT(ctx context.Context, h host.Host, kadDHT *dht.IpfsDHT) error {
 			log.Printf("Connected to bootstrap: %s", peerInfo.ID)
 		}
 	}
-	return kadDHT.Bootstrap(ctx)
+	if err := kadDHT.Bootstrap(ctx); err != nil {
+		return fmt.Errorf("bootstrap DHT: %w", err)
+	}
+	return nil
 }
 
 // AdvertiseModel periodically announces model availability
-func AdvertiseModel(ctx context.Context, dht *dht.IpfsDHT, namespace string) {
+func AdvertiseModel(ctx context.Context, kadDHT *dht.IpfsDHT, namespace string) {
 	ticker := time.NewTicker(advertiseInterval)
 	defer ticker.Stop()
 
@@ -93,7 +98,7 @@ func AdvertiseModel(ctx context.Context, dht *dht.IpfsDHT, namespace string) {
 				log.Printf("Failed to parse namespace as CID: %v", err)
 				continue
 			}
-			err = dht.Provide(ctx, c, true)
+			err = kadDHT.Provide(ctx, c, true)
 			if err != nil {
 				log.Printf("Failed to advertise model: %v", err)
 			} else {
@@ -123,7 +128,7 @@ func GetWorkerNamespaceCID() (cid.Cid, error) {
 }
 
 // RequestWorkerMetadata retrieves metadata from a worker peer using the metadata protocol
-func RequestWorkerMetadata(ctx context.Context, h host.Host, workerPeer peer.ID, logger *zap.Logger) (*crowdllama.CrowdLlamaResource, error) {
+func RequestWorkerMetadata(ctx context.Context, h host.Host, workerPeer peer.ID, logger *zap.Logger) (*crowdllama.Resource, error) {
 	logger.Debug("Opening stream to worker for metadata request",
 		zap.String("worker_peer_id", workerPeer.String()),
 		zap.String("protocol", crowdllama.MetadataProtocol))
@@ -136,10 +141,15 @@ func RequestWorkerMetadata(ctx context.Context, h host.Host, workerPeer peer.ID,
 			zap.Error(err))
 		return nil, fmt.Errorf("failed to open stream to worker: %w", err)
 	}
-	defer stream.Close()
+	defer func() {
+		if closeErr := stream.Close(); closeErr != nil {
+			logger.Warn("failed to close stream", zap.Error(closeErr))
+		}
+	}()
 
-	// Set a read deadline
-	stream.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if setDeadlineErr := stream.SetReadDeadline(time.Now().Add(5 * time.Second)); setDeadlineErr != nil {
+		logger.Warn("failed to set read deadline", zap.Error(setDeadlineErr))
+	}
 
 	logger.Debug("Reading metadata response from worker",
 		zap.String("worker_peer_id", workerPeer.String()))
@@ -150,7 +160,7 @@ func RequestWorkerMetadata(ctx context.Context, h host.Host, workerPeer peer.ID,
 	totalRead := 0
 
 	for {
-		n, err := stream.Read(buf)
+		n, readErr := stream.Read(buf)
 		if n > 0 {
 			metadataJSON = append(metadataJSON, buf[:n]...)
 			totalRead += n
@@ -159,8 +169,8 @@ func RequestWorkerMetadata(ctx context.Context, h host.Host, workerPeer peer.ID,
 				zap.Int("bytes_read", n),
 				zap.Int("total_read", totalRead))
 		}
-		if err != nil {
-			if err.Error() == "EOF" {
+		if readErr != nil {
+			if readErr.Error() == "EOF" {
 				logger.Debug("Received EOF from metadata stream",
 					zap.String("worker_peer_id", workerPeer.String()),
 					zap.Int("total_bytes_read", totalRead))
@@ -168,8 +178,8 @@ func RequestWorkerMetadata(ctx context.Context, h host.Host, workerPeer peer.ID,
 			}
 			logger.Error("Failed to read metadata from worker",
 				zap.String("worker_peer_id", workerPeer.String()),
-				zap.Error(err))
-			return nil, fmt.Errorf("failed to read metadata from worker: %w", err)
+				zap.Error(readErr))
+			return nil, fmt.Errorf("failed to read metadata from worker: %w", readErr)
 		}
 	}
 
@@ -200,8 +210,8 @@ func RequestWorkerMetadata(ctx context.Context, h host.Host, workerPeer peer.ID,
 }
 
 // DiscoverWorkers finds workers advertising the namespace and retrieves their metadata
-func DiscoverWorkers(ctx context.Context, dht *dht.IpfsDHT, logger *zap.Logger) ([]*crowdllama.CrowdLlamaResource, error) {
-	var workers []*crowdllama.CrowdLlamaResource
+func DiscoverWorkers(ctx context.Context, kadDHT *dht.IpfsDHT, logger *zap.Logger) ([]*crowdllama.Resource, error) {
+	workers := make([]*crowdllama.Resource, 0, 10) // Preallocate with capacity 10
 
 	// Get the namespace CID
 	namespaceCID, err := GetWorkerNamespaceCID()
@@ -214,7 +224,7 @@ func DiscoverWorkers(ctx context.Context, dht *dht.IpfsDHT, logger *zap.Logger) 
 		zap.String("cid", namespaceCID.String()))
 
 	// Find providers for the namespace CID
-	providers := dht.FindProvidersAsync(ctx, namespaceCID, 10)
+	providers := kadDHT.FindProvidersAsync(ctx, namespaceCID, 10)
 
 	for provider := range providers {
 		logger.Info("Found worker provider", zap.String("peer_id", provider.ID.String()))
@@ -223,7 +233,7 @@ func DiscoverWorkers(ctx context.Context, dht *dht.IpfsDHT, logger *zap.Logger) 
 		time.Sleep(100 * time.Millisecond)
 
 		// Request metadata from the worker
-		metadata, err := RequestWorkerMetadata(ctx, dht.Host(), provider.ID, logger)
+		metadata, err := RequestWorkerMetadata(ctx, kadDHT.Host(), provider.ID, logger)
 		if err != nil {
 			logger.Warn("Failed to get metadata from worker",
 				zap.String("peer_id", provider.ID.String()),

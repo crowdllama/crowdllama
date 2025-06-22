@@ -1,3 +1,4 @@
+// Package main provides the consumer command for CrowdLlama.
 package main
 
 import (
@@ -38,14 +39,21 @@ func main() {
 		cfg := config.NewConfiguration()
 		cfg.ParseFlags(startCmd)
 
-		startCmd.Parse(os.Args[2:])
+		if err := startCmd.Parse(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to parse args: %v\n", err)
+			os.Exit(1)
+		}
 
 		// Setup logger
 		if err := cfg.SetupLogger(); err != nil {
 			log.Fatalf("Failed to setup logger: %v", err)
 		}
 		logger := cfg.GetLogger()
-		defer logger.Sync()
+		defer func() {
+			if err := logger.Sync(); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to sync logger: %v\n", err)
+			}
+		}()
 
 		if cfg.IsVerbose() {
 			logger.Info("Verbose mode enabled")
@@ -104,11 +112,10 @@ func main() {
 
 		// Gracefully shutdown the HTTP server
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer shutdownCancel()
-
 		if err := c.StopHTTPServer(shutdownCtx); err != nil {
 			logger.Error("Failed to shutdown HTTP server gracefully", zap.Error(err))
 		}
+		defer shutdownCancel()
 
 		logger.Info("Consumer shutdown complete")
 	default:
