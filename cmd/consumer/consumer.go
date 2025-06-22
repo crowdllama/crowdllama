@@ -60,6 +60,10 @@ func main() {
 			logger.Fatal("Failed to initialize consumer", zap.Error(err))
 		}
 
+		// Start background worker discovery
+		c.StartBackgroundDiscovery()
+		logger.Info("Background worker discovery started")
+
 		// Start the HTTP server in a goroutine
 		go func() {
 			if err := c.StartHTTPServer(*port); err != nil {
@@ -73,6 +77,10 @@ func main() {
 		<-sigCh
 
 		logger.Info("Shutting down consumer...")
+
+		// Stop background discovery
+		c.StopBackgroundDiscovery()
+		logger.Info("Background discovery stopped")
 
 		// Gracefully shutdown the HTTP server
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)

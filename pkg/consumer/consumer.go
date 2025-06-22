@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/ipfs/go-cid"
@@ -20,6 +21,9 @@ import (
 const (
 	InferenceProtocol = "/crowdllama/inference/1.0.0"
 	DefaultHTTPPort   = 9001
+	// Discovery intervals
+	DiscoveryInterval = 5 * time.Second  // Reduced from previous intervals
+	WorkerMapTimeout  = 30 * time.Second // How long to keep workers in map
 )
 
 // GenerateRequest represents the JSON request structure for the /api/generate endpoint
@@ -52,6 +56,18 @@ type Consumer struct {
 	DHT    *dht.IpfsDHT
 	logger *zap.Logger
 	server *http.Server
+
+	// Worker discovery state
+	workersMutex    sync.RWMutex
+	workers         map[string]*workerInfo
+	discoveryCtx    context.Context
+	discoveryCancel context.CancelFunc
+}
+
+// workerInfo holds worker metadata with timestamp for cleanup
+type workerInfo struct {
+	Resource *crowdllama.CrowdLlamaResource
+	LastSeen time.Time
 }
 
 func NewConsumer(ctx context.Context, logger *zap.Logger) (*Consumer, error) {
@@ -62,10 +78,16 @@ func NewConsumer(ctx context.Context, logger *zap.Logger) (*Consumer, error) {
 	if err := discovery.BootstrapDHT(ctx, h, kadDHT); err != nil {
 		return nil, err
 	}
+
+	discoveryCtx, discoveryCancel := context.WithCancel(ctx)
+
 	return &Consumer{
-		Host:   h,
-		DHT:    kadDHT,
-		logger: logger,
+		Host:            h,
+		DHT:             kadDHT,
+		logger:          logger,
+		workers:         make(map[string]*workerInfo),
+		discoveryCtx:    discoveryCtx,
+		discoveryCancel: discoveryCancel,
 	}, nil
 }
 
@@ -225,6 +247,7 @@ func (c *Consumer) sendJSONResponse(w http.ResponseWriter, response interface{},
 
 // RequestInference sends a string task to a worker and waits for a response
 func (c *Consumer) RequestInference(ctx context.Context, workerID string, input string) (string, error) {
+	fmt.Println("*** RequestInference is called")
 	pid, err := peer.Decode(workerID)
 	if err != nil {
 		return "", fmt.Errorf("invalid worker peer ID: %w", err)
@@ -310,20 +333,54 @@ func (c *Consumer) getMetadataFromPeer(ctx context.Context, peerID peer.ID) (*cr
 
 // FindBestWorker finds the best available worker based on criteria
 func (c *Consumer) FindBestWorker(ctx context.Context, requiredModel string) (*crowdllama.CrowdLlamaResource, error) {
-	workers, err := c.DiscoverWorkers(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to discover workers: %w", err)
+	// Try to find a worker from the cached map first
+	bestWorker := c.findBestWorkerFromCache(requiredModel)
+	if bestWorker != nil {
+		return bestWorker, nil
 	}
 
-	if len(workers) == 0 {
-		return nil, fmt.Errorf("no workers found")
+	// If no worker found in cache, wait for discovery with timeout
+	c.logger.Info("No suitable worker in cache, waiting for discovery", zap.String("model", requiredModel))
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	timeout := time.After(30 * time.Second) // Wait up to 30 seconds for a worker
+
+	for {
+		select {
+		case <-ticker.C:
+			bestWorker = c.findBestWorkerFromCache(requiredModel)
+			if bestWorker != nil {
+				c.logger.Info("Found suitable worker after waiting",
+					zap.String("worker_id", bestWorker.PeerID),
+					zap.String("model", requiredModel))
+				return bestWorker, nil
+			}
+		case <-timeout:
+			return nil, fmt.Errorf("timeout waiting for worker supporting model: %s", requiredModel)
+		case <-ctx.Done():
+			return nil, fmt.Errorf("context cancelled while waiting for worker: %w", ctx.Err())
+		}
+	}
+}
+
+// findBestWorkerFromCache finds the best worker from the cached worker map
+func (c *Consumer) findBestWorkerFromCache(requiredModel string) *crowdllama.CrowdLlamaResource {
+	c.workersMutex.RLock()
+	defer c.workersMutex.RUnlock()
+
+	if len(c.workers) == 0 {
+		return nil
 	}
 
 	// Find the best worker based on criteria
 	var bestWorker *crowdllama.CrowdLlamaResource
 	var bestScore float64
 
-	for _, worker := range workers {
+	for _, info := range c.workers {
+		worker := info.Resource
+
 		// Check if worker supports the required model
 		supportsModel := false
 		for _, model := range worker.SupportedModels {
@@ -346,11 +403,7 @@ func (c *Consumer) FindBestWorker(ctx context.Context, requiredModel string) (*c
 		}
 	}
 
-	if bestWorker == nil {
-		return nil, fmt.Errorf("no worker found supporting model: %s", requiredModel)
-	}
-
-	return bestWorker, nil
+	return bestWorker
 }
 
 // DiscoverWorkersViaProviders discovers workers using FindProviders and a namespace-derived CID
@@ -368,4 +421,114 @@ func (c *Consumer) DiscoverWorkersViaProviders(ctx context.Context, namespace st
 		peers = append(peers, p.ID)
 	}
 	return peers, nil
+}
+
+// StartBackgroundDiscovery starts the background worker discovery process
+func (c *Consumer) StartBackgroundDiscovery() {
+	c.logger.Info("Starting background worker discovery")
+
+	go func() {
+		ticker := time.NewTicker(DiscoveryInterval)
+		defer ticker.Stop()
+
+		// Run initial discovery immediately
+		c.runDiscovery()
+
+		for {
+			select {
+			case <-ticker.C:
+				c.runDiscovery()
+			case <-c.discoveryCtx.Done():
+				c.logger.Info("Background discovery stopped")
+				return
+			}
+		}
+	}()
+
+	// Start cleanup goroutine
+	go c.cleanupStaleWorkers()
+}
+
+// runDiscovery performs a single discovery run and updates the worker map
+func (c *Consumer) runDiscovery() {
+	ctx, cancel := context.WithTimeout(c.discoveryCtx, 10*time.Second)
+	defer cancel()
+
+	workers, err := c.DiscoverWorkers(ctx)
+	if err != nil {
+		c.logger.Warn("Background discovery failed", zap.Error(err))
+		return
+	}
+
+	c.workersMutex.Lock()
+	defer c.workersMutex.Unlock()
+
+	now := time.Now()
+	updatedCount := 0
+
+	for _, worker := range workers {
+		workerID := worker.PeerID
+		c.workers[workerID] = &workerInfo{
+			Resource: worker,
+			LastSeen: now,
+		}
+		updatedCount++
+	}
+
+	if updatedCount > 0 {
+		c.logger.Info("Background discovery updated workers",
+			zap.Int("updated_count", updatedCount),
+			zap.Int("total_workers", len(c.workers)))
+	}
+}
+
+// cleanupStaleWorkers removes workers that haven't been seen recently
+func (c *Consumer) cleanupStaleWorkers() {
+	ticker := time.NewTicker(WorkerMapTimeout)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			c.workersMutex.Lock()
+			now := time.Now()
+			removedCount := 0
+
+			for workerID, info := range c.workers {
+				if now.Sub(info.LastSeen) > WorkerMapTimeout {
+					delete(c.workers, workerID)
+					removedCount++
+				}
+			}
+
+			if removedCount > 0 {
+				c.logger.Info("Cleaned up stale workers",
+					zap.Int("removed_count", removedCount),
+					zap.Int("remaining_workers", len(c.workers)))
+			}
+			c.workersMutex.Unlock()
+
+		case <-c.discoveryCtx.Done():
+			return
+		}
+	}
+}
+
+// GetAvailableWorkers returns a copy of the current worker map
+func (c *Consumer) GetAvailableWorkers() map[string]*crowdllama.CrowdLlamaResource {
+	c.workersMutex.RLock()
+	defer c.workersMutex.RUnlock()
+
+	result := make(map[string]*crowdllama.CrowdLlamaResource)
+	for workerID, info := range c.workers {
+		result[workerID] = info.Resource
+	}
+	return result
+}
+
+// StopBackgroundDiscovery stops the background discovery process
+func (c *Consumer) StopBackgroundDiscovery() {
+	if c.discoveryCancel != nil {
+		c.discoveryCancel()
+	}
 }
