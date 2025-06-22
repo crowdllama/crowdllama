@@ -71,15 +71,6 @@ func NewWorker(ctx context.Context) (*Worker, error) {
 		fmt.Println("StreamHandler completed")
 	})
 
-	// Add metadata request handler
-	h.SetStreamHandler(crowdllama.MetadataProtocol, func(s network.Stream) {
-		defer s.Close()
-		log.Printf("Worker received metadata request from %s", s.Conn().RemotePeer().String())
-
-		// We'll set up the metadata handler after creating the metadata
-		// This will be handled in the main function
-	})
-
 	// Initialize metadata
 	metadata := crowdllama.NewCrowdLlamaResource(h.ID().String())
 
@@ -92,6 +83,8 @@ func NewWorker(ctx context.Context) (*Worker, error) {
 
 // SetupMetadataHandler sets up the metadata request handler
 func (w *Worker) SetupMetadataHandler() {
+	log.Printf("Setting up metadata handler for protocol: %s", crowdllama.MetadataProtocol)
+
 	w.Host.SetStreamHandler(crowdllama.MetadataProtocol, func(s network.Stream) {
 		defer s.Close()
 		log.Printf("Worker received metadata request from %s", s.Conn().RemotePeer().String())
@@ -103,6 +96,8 @@ func (w *Worker) SetupMetadataHandler() {
 			return
 		}
 
+		log.Printf("Worker sending metadata (%d bytes): %s", len(metadataJSON), string(metadataJSON))
+
 		// Send metadata response
 		_, err = s.Write(metadataJSON)
 		if err != nil {
@@ -110,8 +105,11 @@ func (w *Worker) SetupMetadataHandler() {
 			return
 		}
 
-		log.Printf("Worker sent metadata (%d bytes): %s", len(metadataJSON), string(metadataJSON))
+		// Close the stream after writing to signal EOF
+		log.Printf("Worker sent metadata successfully, closing stream")
 	})
+
+	log.Printf("Metadata handler setup complete")
 }
 
 // UpdateMetadata updates the worker's metadata

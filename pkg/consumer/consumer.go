@@ -3,7 +3,6 @@ package consumer
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/ipfs/go-cid"
@@ -13,16 +12,18 @@ import (
 	"github.com/matiasinsaurralde/crowdllama/internal/discovery"
 	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
 	"github.com/multiformats/go-multihash"
+	"go.uber.org/zap"
 )
 
 const InferenceProtocol = "/crowdllama/inference/1.0.0"
 
 type Consumer struct {
-	Host host.Host
-	DHT  *dht.IpfsDHT
+	Host   host.Host
+	DHT    *dht.IpfsDHT
+	logger *zap.Logger
 }
 
-func NewConsumer(ctx context.Context) (*Consumer, error) {
+func NewConsumer(ctx context.Context, logger *zap.Logger) (*Consumer, error) {
 	h, kadDHT, err := discovery.NewHostAndDHT(ctx)
 	if err != nil {
 		return nil, err
@@ -31,8 +32,9 @@ func NewConsumer(ctx context.Context) (*Consumer, error) {
 		return nil, err
 	}
 	return &Consumer{
-		Host: h,
-		DHT:  kadDHT,
+		Host:   h,
+		DHT:    kadDHT,
+		logger: logger,
 	}, nil
 }
 
@@ -46,20 +48,20 @@ func (c *Consumer) RequestInference(ctx context.Context, workerID string, input 
 	if err != nil {
 		return "", fmt.Errorf("could not find worker peer: %w", err)
 	}
-	fmt.Printf("Opening stream to worker %s\n", peerInfo.ID.String())
+	c.logger.Debug("Opening stream to worker", zap.String("peer_id", peerInfo.ID.String()))
 	stream, err := c.Host.NewStream(ctx, peerInfo.ID, InferenceProtocol)
 	if err != nil {
 		return "", fmt.Errorf("failed to open stream: %w", err)
 	}
 	defer stream.Close()
 
-	fmt.Printf("Writing input to stream: %s\n", input)
+	c.logger.Debug("Writing input to stream", zap.String("input", input))
 	_, err = stream.Write([]byte(input))
 	if err != nil {
 		return "", fmt.Errorf("failed to write to stream: %w", err)
 	}
 
-	fmt.Println("Waiting for response from worker...")
+	c.logger.Debug("Waiting for response from worker...")
 
 	// Read response byte by byte until EOF
 	var response string
@@ -74,11 +76,16 @@ func (c *Consumer) RequestInference(ctx context.Context, workerID string, input 
 		}
 		if n > 0 {
 			response += string(buf[:n])
-			fmt.Printf("Read byte: '%s' (ASCII: %d)\n", string(buf[:n]), buf[0])
+			c.logger.Debug("Read byte from stream",
+				zap.String("byte", string(buf[:n])),
+				zap.Int("ascii", int(buf[0])))
 		}
 	}
 
-	fmt.Printf("Received response (%d bytes): %s\n", len(response), response)
+	c.logger.Info("Received response from worker",
+		zap.String("worker_id", workerID),
+		zap.Int("response_length", len(response)),
+		zap.String("response", response))
 	return response, nil
 }
 
@@ -91,9 +98,9 @@ func (c *Consumer) ListKnownPeersLoop() {
 	go func() {
 		for {
 			peers := c.DHT.RoutingTable().ListPeers()
-			fmt.Printf("[DHT] Known peers (%d):\n", len(peers))
+			c.logger.Info("Known peers in DHT routing table", zap.Int("peer_count", len(peers)))
 			for _, p := range peers {
-				fmt.Println("  ", p.String())
+				c.logger.Debug("Known peer", zap.String("peer_id", p.String()))
 			}
 			time.Sleep(1 * time.Minute)
 		}
@@ -106,22 +113,112 @@ func getWorkerMetadataKey(peerID string) string {
 	return "crowdllama-worker-" + peerID
 }
 
+// getMetadataFromPeer retrieves metadata from a specific peer using the metadata protocol
+func (c *Consumer) getMetadataFromPeer(ctx context.Context, peerID peer.ID) (*crowdllama.CrowdLlamaResource, error) {
+	c.logger.Debug("Attempting to get metadata from peer", zap.String("peer_id", peerID.String()))
+
+	// Try to open a stream to the peer using the metadata protocol
+	stream, err := c.Host.NewStream(ctx, peerID, crowdllama.MetadataProtocol)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open metadata stream: %w", err)
+	}
+	defer stream.Close()
+
+	c.logger.Debug("Successfully opened metadata stream to peer", zap.String("peer_id", peerID.String()))
+
+	// Set a read deadline
+	stream.SetReadDeadline(time.Now().Add(5 * time.Second))
+
+	// Read the metadata response - read all available data until EOF
+	var metadataJSON []byte
+	buf := make([]byte, 1024)
+	totalRead := 0
+
+	for {
+		n, err := stream.Read(buf)
+		if n > 0 {
+			metadataJSON = append(metadataJSON, buf[:n]...)
+			totalRead += n
+			c.logger.Debug("Read bytes from metadata stream",
+				zap.String("peer_id", peerID.String()),
+				zap.Int("bytes_read", n),
+				zap.Int("total_read", totalRead))
+		}
+		if err != nil {
+			if err.Error() == "EOF" {
+				c.logger.Debug("Received EOF from metadata stream",
+					zap.String("peer_id", peerID.String()),
+					zap.Int("total_bytes_read", totalRead))
+				break // EOF reached, we're done reading
+			}
+			return nil, fmt.Errorf("failed to read metadata from stream: %w", err)
+		}
+	}
+
+	if len(metadataJSON) == 0 {
+		return nil, fmt.Errorf("no metadata received from peer")
+	}
+
+	c.logger.Debug("Received metadata from peer",
+		zap.String("peer_id", peerID.String()),
+		zap.Int("metadata_length", len(metadataJSON)),
+		zap.String("metadata", string(metadataJSON)))
+
+	// Parse the metadata JSON
+	resource, err := crowdllama.FromJSON(metadataJSON)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse metadata JSON: %w", err)
+	}
+
+	c.logger.Debug("Successfully parsed metadata from peer", zap.String("peer_id", peerID.String()))
+	return resource, nil
+}
+
 // DiscoverWorkers searches for available workers in the DHT
 func (c *Consumer) DiscoverWorkers(ctx context.Context) ([]*crowdllama.CrowdLlamaResource, error) {
 	var workers []*crowdllama.CrowdLlamaResource
 
-	// For now, we'll use a simple approach to find workers
-	// In a real implementation, you might want to use a more sophisticated discovery mechanism
+	// Use DHT FindProviders to discover workers using the namespace
+	namespace := crowdllama.WorkerNamespace
+	mh, err := multihash.Sum([]byte(namespace), multihash.IDENTITY, -1)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create multihash for namespace: %w", err)
+	}
+	cid := cid.NewCidV1(cid.Raw, mh)
 
-	// Get known peers and try to find their metadata
-	peers := c.DHT.RoutingTable().ListPeers()
-	for _, peerID := range peers {
-		// Try to find providers for this peer's metadata
-		// We'll use a simple approach for now
-		log.Printf("Checking peer: %s", peerID.String())
+	c.logger.Info("Searching for workers with namespace CID", zap.String("namespace", namespace), zap.String("cid", cid.String()))
 
-		// For now, we'll skip this approach and just return empty
-		// In a real implementation, you'd need to implement a proper discovery mechanism
+	// Find providers for the namespace CID
+	providers := c.DHT.FindProvidersAsync(ctx, cid, 10)
+
+	for provider := range providers {
+		c.logger.Info("Found worker provider", zap.String("peer_id", provider.ID.String()))
+
+		// Give the worker a moment to set up handlers
+		time.Sleep(100 * time.Millisecond)
+
+		// Try to get metadata directly from the worker
+		resource, err := c.getMetadataFromPeer(ctx, provider.ID)
+		if err != nil {
+			c.logger.Warn("Failed to get metadata from worker",
+				zap.String("peer_id", provider.ID.String()),
+				zap.Error(err))
+			continue
+		}
+
+		// Verify the metadata is recent (within last 30 seconds)
+		if time.Since(resource.LastUpdated) > 1*time.Hour {
+			c.logger.Warn("Metadata from worker is too old, skipping",
+				zap.String("peer_id", provider.ID.String()),
+				zap.Time("last_updated", resource.LastUpdated))
+			continue
+		}
+
+		workers = append(workers, resource)
+		c.logger.Info("Found worker",
+			zap.String("peer_id", provider.ID.String()),
+			zap.String("gpu_model", resource.GPUModel),
+			zap.Strings("supported_models", resource.SupportedModels))
 	}
 
 	return workers, nil
