@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/matiasinsaurralde/crowdllama/pkg/config"
 	"github.com/matiasinsaurralde/crowdllama/pkg/consumer"
-	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
 	"go.uber.org/zap"
 )
 
@@ -21,7 +22,7 @@ func main() {
 		fmt.Println("Usage: crowdllama <command> [options]")
 		fmt.Println("Commands:")
 		fmt.Println("  version   Print the version information")
-		fmt.Println("  start     Start the application")
+		fmt.Println("  start     Start the HTTP server")
 		os.Exit(1)
 	}
 
@@ -30,6 +31,7 @@ func main() {
 		fmt.Println("crowdllama version", version)
 	case "start":
 		startCmd := flag.NewFlagSet("start", flag.ExitOnError)
+		port := startCmd.Int("port", consumer.DefaultHTTPPort, "HTTP server port")
 
 		// Initialize configuration
 		cfg := config.NewConfiguration()
@@ -48,11 +50,7 @@ func main() {
 			logger.Info("Verbose mode enabled")
 		}
 
-		if startCmd.NArg() < 1 {
-			fmt.Println("Usage: crowdllama start <input>")
-			os.Exit(1)
-		}
-		input := startCmd.Arg(0)
+		logger.Info("Starting CrowdLlama consumer")
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -61,49 +59,30 @@ func main() {
 		if err != nil {
 			logger.Fatal("Failed to initialize consumer", zap.Error(err))
 		}
-		// c.ListKnownPeersLoop()
 
-		var workers []*crowdllama.CrowdLlamaResource
-		for {
-			time.Sleep(1 * time.Second)
-			// Discover available workers
-			logger.Info("Discovering available workers")
-			workers, err = c.DiscoverWorkers(ctx)
-			if err != nil {
-				// logger.Fatal("Failed to discover workers", zap.Error(err))
-				logger.Info("Failed to discover workers", zap.Error(err))
-				continue
+		// Start the HTTP server in a goroutine
+		go func() {
+			if err := c.StartHTTPServer(*port); err != nil {
+				logger.Fatal("HTTP server failed", zap.Error(err))
 			}
+		}()
 
-			if len(workers) == 0 {
-				// logger.Fatal("No workers found. Make sure a worker is running.")
-				logger.Info("No workers found. Make sure a worker is running.")
-				continue
-			}
-			break
+		// Wait for shutdown signal
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+
+		logger.Info("Shutting down consumer...")
+
+		// Gracefully shutdown the HTTP server
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+
+		if err := c.StopHTTPServer(shutdownCtx); err != nil {
+			logger.Error("Failed to shutdown HTTP server gracefully", zap.Error(err))
 		}
 
-		// Find the best worker for the task
-		logger.Info("Finding best available worker")
-		bestWorker, err := c.FindBestWorker(ctx, "llama-2-7b") // Default model
-		if err != nil {
-			logger.Fatal("Failed to find suitable worker", zap.Error(err))
-		}
-
-		logger.Info("Selected worker",
-			zap.String("peer_id", bestWorker.PeerID),
-			zap.String("gpu_model", bestWorker.GPUModel),
-			zap.Float64("tokens_throughput", bestWorker.TokensThroughput),
-			zap.Float64("load", bestWorker.Load))
-
-		logger.Info("Requesting inference",
-			zap.String("worker_peer_id", bestWorker.PeerID),
-			zap.String("input", input))
-		resp, err := c.RequestInference(ctx, bestWorker.PeerID, input)
-		if err != nil {
-			logger.Fatal("Failed to request inference", zap.Error(err))
-		}
-		logger.Info("Received response from worker", zap.String("response", resp))
+		logger.Info("Consumer shutdown complete")
 	default:
 		fmt.Printf("Unknown command: %s\n", os.Args[1])
 		os.Exit(1)

@@ -2,7 +2,9 @@ package consumer
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/ipfs/go-cid"
@@ -15,12 +17,41 @@ import (
 	"go.uber.org/zap"
 )
 
-const InferenceProtocol = "/crowdllama/inference/1.0.0"
+const (
+	InferenceProtocol = "/crowdllama/inference/1.0.0"
+	DefaultHTTPPort   = 9001
+)
+
+// GenerateRequest represents the JSON request structure for the /api/generate endpoint
+type GenerateRequest struct {
+	Model    string    `json:"model"`
+	Messages []Message `json:"messages"`
+	Stream   bool      `json:"stream"`
+}
+
+type Message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// GenerateResponse represents the JSON response structure for the /api/generate endpoint
+type GenerateResponse struct {
+	Model      string    `json:"model"`
+	CreatedAt  time.Time `json:"created_at"`
+	Message    Message   `json:"message"`
+	Stream     bool      `json:"stream"`
+	DoneReason string    `json:"done_reason"`
+	Done       bool      `json:"done"`
+	// WorkerID  string    `json:"worker_id,omitempty"`
+	// Timestamp time.Time `json:"timestamp"`
+	// Error     string    `json:"error,omitempty"`
+}
 
 type Consumer struct {
 	Host   host.Host
 	DHT    *dht.IpfsDHT
 	logger *zap.Logger
+	server *http.Server
 }
 
 func NewConsumer(ctx context.Context, logger *zap.Logger) (*Consumer, error) {
@@ -36,6 +67,221 @@ func NewConsumer(ctx context.Context, logger *zap.Logger) (*Consumer, error) {
 		DHT:    kadDHT,
 		logger: logger,
 	}, nil
+}
+
+// StartHTTPServer starts the HTTP server on the specified port
+func (c *Consumer) StartHTTPServer(port int) error {
+	if port == 0 {
+		port = DefaultHTTPPort
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/chat", c.handleChat)
+
+	// Wrap the mux with logging middleware
+	loggedMux := c.loggingMiddleware(mux)
+
+	c.server = &http.Server{
+		Addr:    fmt.Sprintf(":%d", port),
+		Handler: loggedMux,
+	}
+
+	c.logger.Info("Starting HTTP server", zap.Int("port", port))
+	return c.server.ListenAndServe()
+}
+
+// loggingMiddleware wraps the HTTP handler to log all requests
+func (c *Consumer) loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
+		// Create a response writer wrapper to capture status code
+		wrappedWriter := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+
+		// Log the incoming request
+		c.logger.Info("HTTP request received",
+			zap.String("method", r.Method),
+			zap.String("path", r.URL.Path),
+			zap.String("remote_addr", r.RemoteAddr),
+			zap.String("user_agent", r.UserAgent()),
+			zap.String("content_type", r.Header.Get("Content-Type")),
+			zap.Int64("content_length", r.ContentLength))
+
+		// Call the next handler
+		next.ServeHTTP(wrappedWriter, r)
+
+		// Log the response
+		duration := time.Since(start)
+		c.logger.Info("HTTP request completed",
+			zap.String("method", r.Method),
+			zap.String("path", r.URL.Path),
+			zap.String("remote_addr", r.RemoteAddr),
+			zap.Int("status_code", wrappedWriter.statusCode),
+			zap.Duration("duration", duration))
+	})
+}
+
+// responseWriter wraps http.ResponseWriter to capture status code
+type responseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.statusCode = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+func (rw *responseWriter) Write(b []byte) (int, error) {
+	return rw.ResponseWriter.Write(b)
+}
+
+// StopHTTPServer gracefully stops the HTTP server
+func (c *Consumer) StopHTTPServer(ctx context.Context) error {
+	if c.server != nil {
+		c.logger.Info("Stopping HTTP server")
+		return c.server.Shutdown(ctx)
+	}
+	return nil
+}
+
+// handleChat handles the /api/generate endpoint
+func (c *Consumer) handleChat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		fmt.Println("Method not allowed")
+		return
+	}
+
+	// Parse the request
+	var req GenerateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		c.logger.Error("Failed to decode request", zap.Error(err))
+		fmt.Println("Failed to decode request")
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// Validate the request
+	if req.Model == "" {
+		http.Error(w, "Model is required", http.StatusBadRequest)
+		return
+	}
+
+	c.logger.Info("Processing generate request",
+		zap.String("model", req.Model),
+		zap.Any("messages", req.Messages),
+		zap.Bool("stream", req.Stream))
+
+	// Find the best worker for the model
+	ctx := r.Context()
+	bestWorker, err := c.FindBestWorker(ctx, req.Model)
+	if err != nil {
+		c.logger.Error("Failed to find suitable worker", zap.Error(err))
+		response := GenerateResponse{
+			Model: req.Model,
+		}
+		c.sendJSONResponse(w, response, http.StatusServiceUnavailable)
+		return
+	}
+
+	// Request inference from the worker
+	response, err := c.RequestInference(ctx, bestWorker.PeerID, req.Messages[0].Content)
+	if err != nil {
+		c.logger.Error("Failed to request inference", zap.Error(err))
+		response := GenerateResponse{
+			Model: req.Model,
+		}
+		c.sendJSONResponse(w, response, http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Printf("RequestInference response: %+v, err = %+v\n", response, err)
+
+	// Send successful response
+	generateResponse := GenerateResponse{
+		Model:     req.Model,
+		CreatedAt: time.Now(),
+		Message: Message{
+			Role:    "assistant",
+			Content: response,
+		},
+		Stream:     false,
+		Done:       true,
+		DoneReason: "done",
+	}
+
+	c.sendJSONResponse(w, generateResponse, http.StatusOK)
+}
+
+// handleGenerate handles the /api/generate endpoint
+func (c *Consumer) handleGenerate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Parse the request
+	var req GenerateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		c.logger.Error("Failed to decode request", zap.Error(err))
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// Validate the request
+	if req.Model == "" {
+		http.Error(w, "Model is required", http.StatusBadRequest)
+		return
+	}
+	if len(req.Messages) == 0 {
+		http.Error(w, "No messages provided", http.StatusBadRequest)
+		return
+	}
+
+	c.logger.Info("Processing generate request",
+		zap.String("model", req.Model),
+		zap.Any("mesagess", req.Messages),
+		zap.Bool("stream", req.Stream))
+
+	// Find the best worker for the model
+	ctx := r.Context()
+	bestWorker, err := c.FindBestWorker(ctx, req.Model)
+	if err != nil {
+		c.logger.Error("Failed to find suitable worker", zap.Error(err))
+		response := GenerateResponse{
+			Model: req.Model,
+		}
+		c.sendJSONResponse(w, response, http.StatusServiceUnavailable)
+		return
+	}
+
+	// Request inference from the worker
+	_, err = c.RequestInference(ctx, bestWorker.PeerID, req.Messages[0].Content)
+	if err != nil {
+		c.logger.Error("Failed to request inference", zap.Error(err))
+		response := GenerateResponse{
+			Model: req.Model,
+		}
+		c.sendJSONResponse(w, response, http.StatusInternalServerError)
+		return
+	}
+
+	// Send successful response
+	generateResponse := GenerateResponse{
+		Model: req.Model,
+	}
+
+	c.sendJSONResponse(w, generateResponse, http.StatusOK)
+}
+
+// sendJSONResponse sends a JSON response with the specified status code
+func (c *Consumer) sendJSONResponse(w http.ResponseWriter, response interface{}, statusCode int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		c.logger.Error("Failed to encode JSON response", zap.Error(err))
+	}
 }
 
 // RequestInference sends a string task to a worker and waits for a response
