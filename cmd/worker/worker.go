@@ -64,7 +64,7 @@ func main() {
 
 		// Set sample metadata
 		w.UpdateMetadata(
-			[]string{"llama-2-7b", "llama-2-13b", "mistral-7b"},
+			[]string{"llama-2-7b", "llama-2-13b", "mistral-7b", "tinyllama"},
 			150.0, // tokens/sec
 			24,    // VRAM GB
 			0.3,   // current load
