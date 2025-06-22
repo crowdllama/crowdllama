@@ -75,6 +75,25 @@ func main() {
 		myNamespace := crowdllama.WorkerNamespace
 		w.AdvertiseModel(ctx, myNamespace)
 
+		// Periodically publish metadata to DHT
+		go func() {
+			ticker := time.NewTicker(5 * time.Second)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-ticker.C:
+					if err := w.PublishMetadata(ctx); err != nil {
+						logger.Error("Failed to publish metadata", zap.Error(err))
+					} else {
+						logger.Info("Published metadata to DHT")
+					}
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+
 		// Keep running until interrupted
 		logger.Info("Worker running. Press Ctrl+C to exit.")
 		for {
