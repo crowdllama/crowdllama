@@ -58,21 +58,48 @@ func NewHostAndDHT(ctx context.Context, privKey crypto.PrivKey) (host.Host, *dht
 
 // BootstrapDHT connects to bootstrap peers. If customPeers is nil, use a local bootstrap address for fast local discovery.
 func BootstrapDHT(ctx context.Context, h host.Host, kadDHT *dht.IpfsDHT) error {
+	return BootstrapDHTWithPeers(ctx, h, kadDHT, nil)
+}
+
+// BootstrapDHTWithPeers connects to custom bootstrap peers. If customPeers is nil or empty, use defaults.
+func BootstrapDHTWithPeers(ctx context.Context, h host.Host, kadDHT *dht.IpfsDHT, customPeers []string) error {
 	var bootstrapPeers []peer.AddrInfo
-	addr, err := multiaddr.NewMultiaddr(defaultBootstrapPeerAddr)
-	if err == nil {
-		peerInfo, err := peer.AddrInfoFromP2pAddr(addr)
-		if err != nil {
-			log.Printf("Failed to parse bootstrap peer info: %v", err)
+
+	if len(customPeers) > 0 {
+		// Use custom bootstrap peers
+		for _, peerAddr := range customPeers {
+			addr, err := multiaddr.NewMultiaddr(peerAddr)
+			if err != nil {
+				log.Printf("Failed to parse custom bootstrap peer address %s: %v", peerAddr, err)
+				continue
+			}
+			peerInfo, err := peer.AddrInfoFromP2pAddr(addr)
+			if err != nil {
+				log.Printf("Failed to parse custom bootstrap peer info %s: %v", peerAddr, err)
+				continue
+			}
+			bootstrapPeers = append(bootstrapPeers, *peerInfo)
+		}
+	}
+
+	// If no custom peers or all failed to parse, fallback to default
+	if len(bootstrapPeers) == 0 {
+		addr, err := multiaddr.NewMultiaddr(defaultBootstrapPeerAddr)
+		if err == nil {
+			peerInfo, err := peer.AddrInfoFromP2pAddr(addr)
+			if err != nil {
+				log.Printf("Failed to parse bootstrap peer info: %v", err)
+				// fallback to default public bootstrap peers
+				bootstrapPeers = dht.GetDefaultBootstrapPeerAddrInfos()
+			} else {
+				bootstrapPeers = []peer.AddrInfo{*peerInfo}
+			}
+		} else {
 			// fallback to default public bootstrap peers
 			bootstrapPeers = dht.GetDefaultBootstrapPeerAddrInfos()
-		} else {
-			bootstrapPeers = []peer.AddrInfo{*peerInfo}
 		}
-	} else {
-		// fallback to default public bootstrap peers
-		bootstrapPeers = dht.GetDefaultBootstrapPeerAddrInfos()
 	}
+
 	for _, peerInfo := range bootstrapPeers {
 		if err := h.Connect(ctx, peerInfo); err != nil {
 			log.Printf("Failed to connect to bootstrap %s: %v", peerInfo.ID, err)

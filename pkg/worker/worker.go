@@ -155,12 +155,25 @@ func handleInferenceRequest(ctx context.Context, s network.Stream) {
 
 // NewWorker creates a new worker instance
 func NewWorker(ctx context.Context, privKey crypto.PrivKey) (*Worker, error) {
+	return NewWorkerWithBootstrapPeers(ctx, privKey, nil)
+}
+
+// NewWorkerWithBootstrapPeers creates a new worker instance with custom bootstrap peers
+func NewWorkerWithBootstrapPeers(ctx context.Context, privKey crypto.PrivKey, bootstrapPeers []string) (*Worker, error) {
 	h, kadDHT, err := discovery.NewHostAndDHT(ctx, privKey)
 	if err != nil {
 		return nil, fmt.Errorf("new host and DHT: %w", err)
 	}
-	if err := discovery.BootstrapDHT(ctx, h, kadDHT); err != nil {
-		return nil, fmt.Errorf("bootstrap DHT: %w", err)
+
+	// Bootstrap with custom peers if provided, otherwise use defaults
+	if len(bootstrapPeers) > 0 {
+		if err := discovery.BootstrapDHTWithPeers(ctx, h, kadDHT, bootstrapPeers); err != nil {
+			return nil, fmt.Errorf("bootstrap DHT with custom peers: %w", err)
+		}
+	} else {
+		if err := discovery.BootstrapDHT(ctx, h, kadDHT); err != nil {
+			return nil, fmt.Errorf("bootstrap DHT: %w", err)
+		}
 	}
 
 	fmt.Println("BootstrapDHT ok")

@@ -157,6 +157,32 @@ func (s *DHTServer) GetPrimaryPeerAddr() string {
 	return ""
 }
 
+// GetPeers returns all connected peer IDs
+func (s *DHTServer) GetPeers() []string {
+	peers := s.Host.Network().Peers()
+	peerIDs := make([]string, 0, len(peers))
+	for _, p := range peers {
+		peerIDs = append(peerIDs, p.String())
+	}
+	return peerIDs
+}
+
+// HasPeer checks if a specific peer ID is connected
+func (s *DHTServer) HasPeer(peerID string) bool {
+	peers := s.Host.Network().Peers()
+	for _, p := range peers {
+		if p.String() == peerID {
+			return true
+		}
+	}
+	return false
+}
+
+// GetConnectedPeersCount returns the number of connected peers
+func (s *DHTServer) GetConnectedPeersCount() int {
+	return len(s.Host.Network().Peers())
+}
+
 // discoverWorkersPeriodically periodically discovers workers advertising the namespace
 func (s *DHTServer) discoverWorkersPeriodically() {
 	ticker := time.NewTicker(10 * time.Second) // Run every 10 seconds for testing
