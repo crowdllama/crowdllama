@@ -10,6 +10,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/matiasinsaurralde/crowdllama/internal/keys"
 	"github.com/matiasinsaurralde/crowdllama/pkg/config"
 	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
@@ -44,19 +45,15 @@ func main() {
 func runWorker() error {
 	startCmd := flag.NewFlagSet("start", flag.ExitOnError)
 
-	// Initialize configuration
-	cfg := config.NewConfiguration()
-	cfg.ParseFlags(startCmd)
-
-	if err := startCmd.Parse(os.Args[2:]); err != nil {
-		return fmt.Errorf("failed to parse args: %w", err)
+	cfg, err := parseWorkerConfig(startCmd)
+	if err != nil {
+		return err
 	}
 
-	// Setup logger
-	if err := cfg.SetupLogger(); err != nil {
-		return fmt.Errorf("failed to setup logger: %w", err)
+	logger, err := setupWorkerLogger(cfg)
+	if err != nil {
+		return err
 	}
-	logger := cfg.GetLogger()
 	defer func() {
 		if err := logger.Sync(); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to sync logger: %v\n", err)
@@ -66,26 +63,11 @@ func runWorker() error {
 	if cfg.IsVerbose() {
 		logger.Info("Verbose mode enabled")
 	}
-
 	logger.Info("Starting crowdllama worker")
 
-	// Determine key path
-	keyPath := cfg.KeyPath
-	if keyPath == "" {
-		defaultPath, err := keys.GetDefaultKeyPath("worker")
-		if err != nil {
-			return fmt.Errorf("failed to get default key path: %w", err)
-		}
-		keyPath = defaultPath
-	}
-
-	// Initialize key manager
-	keyManager := keys.NewKeyManager(keyPath, logger)
-
-	// Get or create private key
-	privKey, err := keyManager.GetOrCreatePrivateKey()
+	privKey, err := getWorkerPrivateKey(cfg, logger)
 	if err != nil {
-		return fmt.Errorf("failed to get or create private key: %w", err)
+		return err
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -97,10 +79,51 @@ func runWorker() error {
 	}
 	logger.Info("Worker initialized", zap.String("peer_id", w.Host.ID().String()))
 
-	// Set up metadata handler
-	w.SetupMetadataHandler()
+	setupWorkerMetadata(w)
+	w.AdvertiseModel(ctx, crowdllama.WorkerNamespace)
+	startMetadataPublisher(ctx, w, logger)
 
-	// Set sample metadata
+	logger.Info("Worker running. Press Ctrl+C to exit.")
+	for {
+		time.Sleep(10 * time.Second)
+	}
+}
+
+func parseWorkerConfig(startCmd *flag.FlagSet) (*config.Configuration, error) {
+	cfg := config.NewConfiguration()
+	cfg.ParseFlags(startCmd)
+	if err := startCmd.Parse(os.Args[2:]); err != nil {
+		return nil, fmt.Errorf("failed to parse args: %w", err)
+	}
+	return cfg, nil
+}
+
+func setupWorkerLogger(cfg *config.Configuration) (*zap.Logger, error) {
+	if err := cfg.SetupLogger(); err != nil {
+		return nil, fmt.Errorf("failed to setup logger: %w", err)
+	}
+	return cfg.GetLogger(), nil
+}
+
+func getWorkerPrivateKey(cfg *config.Configuration, logger *zap.Logger) (crypto.PrivKey, error) {
+	keyPath := cfg.KeyPath
+	if keyPath == "" {
+		defaultPath, err := keys.GetDefaultKeyPath("worker")
+		if err != nil {
+			return nil, fmt.Errorf("failed to get default key path: %w", err)
+		}
+		keyPath = defaultPath
+	}
+	keyManager := keys.NewKeyManager(keyPath, logger)
+	privKey, err := keyManager.GetOrCreatePrivateKey()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get or create private key: %w", err)
+	}
+	return privKey, nil
+}
+
+func setupWorkerMetadata(w *worker.Worker) {
+	w.SetupMetadataHandler()
 	w.UpdateMetadata(
 		[]string{"llama-2-7b", "llama-2-13b", "mistral-7b", "tinyllama"},
 		150.0, // tokens/sec
@@ -108,16 +131,12 @@ func runWorker() error {
 		0.3,   // current load
 		"RTX 4090",
 	)
+}
 
-	// Generate a valid CID from a string namespace
-	myNamespace := crowdllama.WorkerNamespace
-	w.AdvertiseModel(ctx, myNamespace)
-
-	// Periodically publish metadata to DHT
+func startMetadataPublisher(ctx context.Context, w *worker.Worker, logger *zap.Logger) {
 	go func() {
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
-
 		for {
 			select {
 			case <-ticker.C:
@@ -131,10 +150,4 @@ func runWorker() error {
 			}
 		}
 	}()
-
-	// Keep running until interrupted
-	logger.Info("Worker running. Press Ctrl+C to exit.")
-	for {
-		time.Sleep(10 * time.Second)
-	}
 }
