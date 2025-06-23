@@ -132,7 +132,7 @@ func (c *Consumer) StartHTTPServer(port int) error {
 	}
 
 	c.logger.Info("Starting HTTP server", zap.Int("port", port))
-	if err := c.server.ListenAndServe(); err != nil {
+	if err := c.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("listen and serve: %w", err)
 	}
 	return nil
