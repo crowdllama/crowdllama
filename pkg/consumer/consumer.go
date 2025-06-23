@@ -80,12 +80,25 @@ type workerInfo struct {
 
 // NewConsumer creates a new consumer instance
 func NewConsumer(ctx context.Context, logger *zap.Logger, privKey crypto.PrivKey) (*Consumer, error) {
+	return NewConsumerWithBootstrapPeers(ctx, logger, privKey, nil)
+}
+
+// NewConsumerWithBootstrapPeers creates a new consumer instance with custom bootstrap peers
+func NewConsumerWithBootstrapPeers(ctx context.Context, logger *zap.Logger, privKey crypto.PrivKey, bootstrapPeers []string) (*Consumer, error) {
 	h, kadDHT, err := discovery.NewHostAndDHT(ctx, privKey)
 	if err != nil {
 		return nil, fmt.Errorf("new host and DHT: %w", err)
 	}
-	if err := discovery.BootstrapDHT(ctx, h, kadDHT); err != nil {
-		return nil, fmt.Errorf("bootstrap DHT: %w", err)
+
+	// Bootstrap with custom peers if provided, otherwise use defaults
+	if len(bootstrapPeers) > 0 {
+		if err := discovery.BootstrapDHTWithPeers(ctx, h, kadDHT, bootstrapPeers); err != nil {
+			return nil, fmt.Errorf("bootstrap DHT with custom peers: %w", err)
+		}
+	} else {
+		if err := discovery.BootstrapDHT(ctx, h, kadDHT); err != nil {
+			return nil, fmt.Errorf("bootstrap DHT: %w", err)
+		}
 	}
 
 	discoveryCtx, discoveryCancel := context.WithCancel(ctx)
@@ -548,4 +561,55 @@ func (c *Consumer) StopBackgroundDiscovery() {
 	if c.discoveryCancel != nil {
 		c.discoveryCancel()
 	}
+}
+
+// GetPeerID returns the consumer's peer ID
+func (c *Consumer) GetPeerID() string {
+	return c.Host.ID().String()
+}
+
+// GetPeerAddrs returns all peer addresses in the required format
+func (c *Consumer) GetPeerAddrs() []string {
+	addrs := c.Host.Addrs()
+	peerAddrs := make([]string, 0, len(addrs))
+	for _, addr := range addrs {
+		fullAddr := fmt.Sprintf("%s/p2p/%s", addr.String(), c.Host.ID().String())
+		peerAddrs = append(peerAddrs, fullAddr)
+	}
+	return peerAddrs
+}
+
+// GetPrimaryPeerAddr returns the primary peer address (first in the list)
+func (c *Consumer) GetPrimaryPeerAddr() string {
+	peerAddrs := c.GetPeerAddrs()
+	if len(peerAddrs) > 0 {
+		return peerAddrs[0]
+	}
+	return ""
+}
+
+// GetPeers returns all connected peer IDs
+func (c *Consumer) GetPeers() []string {
+	peers := c.Host.Network().Peers()
+	peerIDs := make([]string, 0, len(peers))
+	for _, p := range peers {
+		peerIDs = append(peerIDs, p.String())
+	}
+	return peerIDs
+}
+
+// HasPeer checks if a specific peer ID is connected
+func (c *Consumer) HasPeer(peerID string) bool {
+	peers := c.Host.Network().Peers()
+	for _, p := range peers {
+		if p.String() == peerID {
+			return true
+		}
+	}
+	return false
+}
+
+// GetConnectedPeersCount returns the number of connected peers
+func (c *Consumer) GetConnectedPeersCount() int {
+	return len(c.Host.Network().Peers())
 }
