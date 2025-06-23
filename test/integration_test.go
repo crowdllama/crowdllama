@@ -15,6 +15,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/matiasinsaurralde/crowdllama/internal/keys"
 	"github.com/matiasinsaurralde/crowdllama/pkg/consumer"
 	"github.com/matiasinsaurralde/crowdllama/pkg/dht"
@@ -130,17 +131,13 @@ func (m *MockOllamaServer) GetPort() int {
 
 // TestFullIntegration tests the complete end-to-end flow
 func TestFullIntegration(t *testing.T) {
-	// Skip this test if not running integration tests
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-
 	logger, _ := zap.NewDevelopment()
 
-	// Create temporary directory for keys
 	tempDir, err := os.MkdirTemp("", "crowdllama-full-integration-test")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
@@ -151,190 +148,188 @@ func TestFullIntegration(t *testing.T) {
 		}
 	}()
 
-	// Create temporary keys for all components
 	dhtKeyPath := filepath.Join(tempDir, "dht.key")
 	workerKeyPath := filepath.Join(tempDir, "worker.key")
 	consumerKeyPath := filepath.Join(tempDir, "consumer.key")
-
 	dhtKeyManager := keys.NewKeyManager(dhtKeyPath, logger)
 	workerKeyManager := keys.NewKeyManager(workerKeyPath, logger)
 	consumerKeyManager := keys.NewKeyManager(consumerKeyPath, logger)
-
 	dhtPrivKey, err := dhtKeyManager.GetOrCreatePrivateKey()
 	if err != nil {
 		t.Fatalf("Failed to create DHT private key: %v", err)
 	}
-
 	workerPrivKey, err := workerKeyManager.GetOrCreatePrivateKey()
 	if err != nil {
 		t.Fatalf("Failed to create worker private key: %v", err)
 	}
-
 	consumerPrivKey, err := consumerKeyManager.GetOrCreatePrivateKey()
 	if err != nil {
 		t.Fatalf("Failed to create consumer private key: %v", err)
 	}
 
-	// Step 1: Start Mock Ollama Server on a different port to avoid conflicts
-	t.Log("Step 1: Starting Mock Ollama Server")
-	mockOllamaPort := 11435 // Use different port to avoid conflicts
-	mockOllama := NewMockOllamaServer(mockOllamaPort)
+	mockOllamaPort := 11435
+	mockOllama := stepStartMockOllamaServer(t, mockOllamaPort)
+	defer stepShutdownMockOllamaServer(t, mockOllama)
+	dhtServer := stepInitDHTServerFull(t, ctx, dhtPrivKey, logger)
+	defer dhtServer.Stop()
+	dhtPeerAddr := stepStartDHTServerFull(t, dhtServer)
+	workerInstance := stepInitWorkerFull(t, ctx, workerPrivKey, dhtPeerAddr, mockOllamaPort)
+	stepSetupWorkerMetadataFull(t, workerInstance)
+	stepAdvertiseWorkerFull(t, ctx, workerInstance)
+	consumerInstance := stepInitConsumerFull(t, ctx, logger, consumerPrivKey, dhtPeerAddr)
+	stepStartConsumerDiscoveryFull(t, consumerInstance)
+	defer consumerInstance.StopBackgroundDiscovery()
+	consumerPort := 9003
+	stepStartConsumerHTTPServerFull(t, consumerInstance, consumerPort)
+	defer stepShutdownConsumerHTTPServerFull(t, consumerInstance)
+	stepWaitForDiscoveryFull(t, t, dhtServer, workerInstance, consumerInstance)
+	stepSendAndValidateRequestFull(t, ctx, consumerPort, workerInstance)
+}
+
+// Helper functions for TestFullIntegration (each starts with t.Helper())
+func stepStartMockOllamaServer(t *testing.T, port int) *MockOllamaServer {
+	t.Helper()
+	mockOllama := NewMockOllamaServer(port)
 	go func() {
 		if startErr := mockOllama.Start(); startErr != nil && startErr != http.ErrServerClosed {
 			t.Errorf("Mock Ollama server failed: %v", startErr)
 		}
 	}()
-	defer func() {
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer shutdownCancel()
-		if stopErr := mockOllama.Stop(shutdownCtx); stopErr != nil {
-			t.Logf("Failed to stop mock Ollama server: %v", stopErr)
-		}
-	}()
-
-	// Give the mock server time to start
 	time.Sleep(1 * time.Second)
+	return mockOllama
+}
 
-	// Step 2: Initialize DHT Server
-	t.Log("Step 2: Initializing DHT Server")
+func stepShutdownMockOllamaServer(t *testing.T, mockOllama *MockOllamaServer) {
+	t.Helper()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if stopErr := mockOllama.Stop(shutdownCtx); stopErr != nil {
+		t.Logf("Failed to stop mock Ollama server: %v", stopErr)
+	}
+}
+
+func stepInitDHTServerFull(t *testing.T, ctx context.Context, dhtPrivKey crypto.PrivKey, logger *zap.Logger) *dht.Server {
+	t.Helper()
 	dhtServer, err := dht.NewDHTServer(ctx, dhtPrivKey, logger)
 	if err != nil {
 		t.Fatalf("Failed to create DHT server: %v", err)
 	}
-	defer dhtServer.Stop()
+	return dhtServer
+}
 
-	// Start the DHT server
+func stepStartDHTServerFull(t *testing.T, dhtServer *dht.Server) string {
+	t.Helper()
 	dhtPeerAddr, err := dhtServer.Start()
 	if err != nil {
 		t.Fatalf("Failed to start DHT server: %v", err)
 	}
+	return dhtPeerAddr
+}
 
-	t.Logf("DHT server started with peer address: %s", dhtPeerAddr)
-	t.Logf("DHT server peer ID: %s", dhtServer.GetPeerID())
-
-	// Step 3: Initialize Worker with DHT server as bootstrap peer
-	t.Log("Step 3: Initializing Worker with DHT server as bootstrap peer")
+func stepInitWorkerFull(t *testing.T, ctx context.Context, workerPrivKey crypto.PrivKey, dhtPeerAddr string, mockOllamaPort int) *worker.Worker {
+	t.Helper()
 	mockOllamaURL := fmt.Sprintf("http://localhost:%d/api/chat", mockOllamaPort)
 	workerInstance, err := worker.NewWorkerWithBootstrapPeersAndOllamaURL(ctx, workerPrivKey, []string{dhtPeerAddr}, mockOllamaURL)
 	if err != nil {
 		t.Fatalf("Failed to create worker: %v", err)
 	}
+	return workerInstance
+}
 
-	// Setup worker metadata and handlers
+func stepSetupWorkerMetadataFull(t *testing.T, workerInstance *worker.Worker) {
+	t.Helper()
 	workerInstance.SetupMetadataHandler()
 	workerInstance.UpdateMetadata(
-		[]string{"tinyllama"}, // Supported models
-		100.0,                 // Tokens throughput
-		8,                     // VRAM GB
-		0.1,                   // Load
-		"RTX 4090",            // GPU model
+		[]string{"tinyllama"},
+		100.0,
+		8,
+		0.1,
+		"RTX 4090",
 	)
+}
 
-	// Start advertising the worker
+func stepAdvertiseWorkerFull(t *testing.T, ctx context.Context, workerInstance *worker.Worker) {
+	t.Helper()
 	workerInstance.AdvertiseModel(ctx, "tinyllama")
+}
 
-	t.Logf("Worker created with peer ID: %s", workerInstance.Host.ID().String())
-	t.Logf("Worker peer addresses: %v", workerInstance.Host.Addrs())
-
-	// Step 4: Initialize Consumer with DHT server as bootstrap peer
-	t.Log("Step 4: Initializing Consumer with DHT server as bootstrap peer")
+func stepInitConsumerFull(t *testing.T, ctx context.Context, logger *zap.Logger, consumerPrivKey crypto.PrivKey, dhtPeerAddr string) *consumer.Consumer {
+	t.Helper()
 	consumerInstance, err := consumer.NewConsumerWithBootstrapPeers(ctx, logger, consumerPrivKey, []string{dhtPeerAddr})
 	if err != nil {
 		t.Fatalf("Failed to create consumer: %v", err)
 	}
+	return consumerInstance
+}
 
-	// Start background discovery
+func stepStartConsumerDiscoveryFull(t *testing.T, consumerInstance *consumer.Consumer) {
+	t.Helper()
 	consumerInstance.StartBackgroundDiscovery()
-	defer consumerInstance.StopBackgroundDiscovery()
+}
 
-	t.Logf("Consumer created with peer ID: %s", consumerInstance.GetPeerID())
-	t.Logf("Consumer peer addresses: %v", consumerInstance.GetPeerAddrs())
-
-	// Step 5: Start Consumer HTTP Server on a specific port
-	t.Log("Step 5: Starting Consumer HTTP Server")
-	consumerPort := 9003 // Use different port to avoid conflicts
+func stepStartConsumerHTTPServerFull(t *testing.T, consumerInstance *consumer.Consumer, consumerPort int) {
+	t.Helper()
 	go func() {
 		if startErr := consumerInstance.StartHTTPServer(consumerPort); startErr != nil && startErr != http.ErrServerClosed {
 			t.Errorf("Consumer HTTP server failed: %v", startErr)
 		}
 	}()
-	defer func() {
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer shutdownCancel()
-		if stopErr := consumerInstance.StopHTTPServer(shutdownCtx); stopErr != nil {
-			t.Logf("Failed to stop HTTP server: %v", stopErr)
-		}
-	}()
-
-	// Give the HTTP server time to start
 	time.Sleep(2 * time.Second)
+}
 
-	// Step 6: Wait for both nodes to show up in DHT
-	t.Log("Step 6: Waiting for both nodes to show up in DHT")
+func stepShutdownConsumerHTTPServerFull(t *testing.T, consumerInstance *consumer.Consumer) {
+	t.Helper()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if stopErr := consumerInstance.StopHTTPServer(shutdownCtx); stopErr != nil {
+		t.Logf("Failed to stop HTTP server: %v", stopErr)
+	}
+}
 
-	// Wait for worker to be discovered
+func stepWaitForDiscoveryFull(t *testing.T, _t *testing.T, dhtServer *dht.Server, workerInstance *worker.Worker, consumerInstance *consumer.Consumer) {
+	t.Helper()
 	maxAttempts := 20
 	attempt := 0
 	workerFound := false
 	workerPeerID := workerInstance.Host.ID().String()
-
 	for attempt < maxAttempts {
 		attempt++
 		t.Logf("Attempt %d/%d: Checking if worker is discovered", attempt, maxAttempts)
-
-		// Check if worker is connected to DHT
 		if dhtServer.HasPeer(workerPeerID) {
 			t.Logf("Worker peer ID %s found in DHT server's connected peers", workerPeerID)
 			workerFound = true
 			break
 		}
-
-		// Wait before next attempt
 		time.Sleep(1 * time.Second)
 	}
-
 	if !workerFound {
 		t.Errorf("Worker peer ID %s was not found in DHT server after %d attempts", workerPeerID, maxAttempts)
 	} else {
 		t.Logf("✅ SUCCESS: Worker peer ID %s found in DHT server", workerPeerID)
 	}
-
-	// Wait for consumer to be discovered
 	attempt = 0
 	consumerFound := false
 	consumerPeerID := consumerInstance.GetPeerID()
-
 	for attempt < maxAttempts {
 		attempt++
 		t.Logf("Attempt %d/%d: Checking if consumer is discovered", attempt, maxAttempts)
-
-		// Check if consumer is connected to DHT
 		if dhtServer.HasPeer(consumerPeerID) {
 			t.Logf("Consumer peer ID %s found in DHT server's connected peers", consumerPeerID)
 			consumerFound = true
 			break
 		}
-
-		// Wait before next attempt
 		time.Sleep(1 * time.Second)
 	}
-
 	if !consumerFound {
 		t.Errorf("Consumer peer ID %s was not found in DHT server after %d attempts", consumerPeerID, maxAttempts)
 	} else {
 		t.Logf("✅ SUCCESS: Consumer peer ID %s found in DHT server", consumerPeerID)
 	}
-
-	// Step 7: Wait for consumer to discover the worker
-	t.Log("Step 7: Waiting for consumer to discover the worker")
-
 	attempt = 0
 	workerDiscovered := false
-
 	for attempt < maxAttempts {
 		attempt++
 		t.Logf("Attempt %d/%d: Checking if consumer discovered the worker", attempt, maxAttempts)
-
 		availableWorkers := consumerInstance.GetAvailableWorkers()
 		if len(availableWorkers) > 0 {
 			t.Logf("Consumer discovered %d workers", len(availableWorkers))
@@ -346,25 +341,20 @@ func TestFullIntegration(t *testing.T) {
 				}
 			}
 		}
-
 		if workerDiscovered {
 			break
 		}
-
-		// Wait before next attempt
 		time.Sleep(1 * time.Second)
 	}
-
 	if !workerDiscovered {
 		t.Errorf("Worker was not discovered by consumer after %d attempts", maxAttempts)
 	} else {
 		t.Logf("✅ SUCCESS: Worker discovered by consumer")
 	}
+}
 
-	// Step 8: Send HTTP request to consumer and validate response
-	t.Log("Step 8: Sending HTTP request to consumer and validating response")
-
-	// Prepare the request
+func stepSendAndValidateRequestFull(t *testing.T, ctx context.Context, consumerPort int, workerInstance *worker.Worker) {
+	t.Helper()
 	requestBody := map[string]interface{}{
 		"model": "tinyllama",
 		"messages": []map[string]string{
@@ -375,26 +365,19 @@ func TestFullIntegration(t *testing.T) {
 		},
 		"stream": false,
 	}
-
 	requestJSON, err := json.Marshal(requestBody)
 	if err != nil {
 		t.Fatalf("Failed to marshal request: %v", err)
 	}
-
-	// Send HTTP request to consumer
 	url := fmt.Sprintf("http://localhost:%d/api/chat", consumerPort)
 	t.Logf("Sending request to: %s", url)
-
-	// Validate URL is localhost for security
 	if !strings.HasPrefix(url, "http://localhost:") {
 		t.Fatalf("Invalid URL for testing: %s", url)
 	}
-
 	req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(requestJSON))
 	if reqErr != nil {
 		t.Fatalf("Failed to create HTTP request: %v", reqErr)
 	}
-	// #nosec G107
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("Failed to send HTTP request: %v", err)
@@ -404,8 +387,6 @@ func TestFullIntegration(t *testing.T) {
 			t.Logf("Failed to close response body: %v", closeErr)
 		}
 	}()
-
-	// Check HTTP status code
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected HTTP 200, got %d", resp.StatusCode)
 		body, _ := io.ReadAll(resp.Body)
@@ -413,48 +394,34 @@ func TestFullIntegration(t *testing.T) {
 	} else {
 		t.Logf("✅ SUCCESS: HTTP request returned status 200")
 	}
-
-	// Read and parse the response
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("Failed to read response body: %v", err)
 	}
-
 	t.Logf("Response body: %s", string(respBody))
-
-	// Parse the JSON response
 	var response consumer.GenerateResponse
 	if err := json.Unmarshal(respBody, &response); err != nil {
 		t.Fatalf("Failed to unmarshal response: %v", err)
 	}
-
-	// Validate the response structure
 	if response.Model != "tinyllama" {
 		t.Errorf("Expected model 'tinyllama', got '%s'", response.Model)
 	}
-
 	if response.Message.Role != "assistant" {
 		t.Errorf("Expected message role 'assistant', got '%s'", response.Message.Role)
 	}
-
 	if response.Message.Content == "" {
 		t.Error("Expected non-empty message content")
 	}
-
 	if !response.Done {
 		t.Error("Expected response to be done")
 	}
-
 	if response.DoneReason != "done" {
 		t.Errorf("Expected done reason 'done', got '%s'", response.DoneReason)
 	}
-
-	// Validate that the response content matches our mock server's expected output
 	expectedContentPrefix := "This is a mock response from the Ollama API. You asked: Hello, how are you?"
 	if response.Message.Content != expectedContentPrefix {
 		t.Errorf("Expected response content to start with '%s', got '%s'", expectedContentPrefix, response.Message.Content)
 	}
-
 	t.Logf("✅ SUCCESS: Response validation passed")
 	t.Logf("✅ SUCCESS: Full integration test completed successfully")
 }
@@ -496,6 +463,7 @@ func shutdownMockOllamaServer(t *testing.T, mockOllama *MockOllamaServer) {
 }
 
 func testMockOllamaRequest(t *testing.T, mockOllama *MockOllamaServer) {
+	t.Helper()
 	requestBody := MockOllamaRequest{
 		Model: "tinyllama",
 		Messages: []Message{
@@ -514,7 +482,6 @@ func testMockOllamaRequest(t *testing.T, mockOllama *MockOllamaServer) {
 
 	url := fmt.Sprintf("http://localhost:%d/api/chat", mockOllama.GetPort())
 
-	// Validate URL is localhost for security
 	if !strings.HasPrefix(url, "http://localhost:") {
 		t.Fatalf("Invalid URL for testing: %s", url)
 	}
@@ -523,7 +490,6 @@ func testMockOllamaRequest(t *testing.T, mockOllama *MockOllamaServer) {
 	if reqErr != nil {
 		t.Fatalf("Failed to create HTTP request: %v", reqErr)
 	}
-	// #nosec G107
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("Failed to send HTTP request: %v", err)
