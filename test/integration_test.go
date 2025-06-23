@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,12 +89,16 @@ func NewMockOllamaServer(port int) *MockOllamaServer {
 
 		// Send the response
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+			return
+		}
 	})
 
 	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
-		Handler: mux,
+		Addr:              fmt.Sprintf(":%d", port),
+		Handler:           mux,
+		ReadHeaderTimeout: 30 * time.Second,
 	}
 
 	return &MockOllamaServer{
@@ -104,12 +109,18 @@ func NewMockOllamaServer(port int) *MockOllamaServer {
 
 // Start starts the mock Ollama server
 func (m *MockOllamaServer) Start() error {
-	return m.server.ListenAndServe()
+	if err := m.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		return fmt.Errorf("mock server listen and serve: %w", err)
+	}
+	return nil
 }
 
 // Stop stops the mock Ollama server
 func (m *MockOllamaServer) Stop(ctx context.Context) error {
-	return m.server.Shutdown(ctx)
+	if err := m.server.Shutdown(ctx); err != nil {
+		return fmt.Errorf("mock server shutdown: %w", err)
+	}
+	return nil
 }
 
 // GetPort returns the port the server is running on
@@ -134,7 +145,11 @@ func TestFullIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() {
+		if removeErr := os.RemoveAll(tempDir); removeErr != nil {
+			t.Logf("Failed to remove temp dir: %v", removeErr)
+		}
+	}()
 
 	// Create temporary keys for all components
 	dhtKeyPath := filepath.Join(tempDir, "dht.key")
@@ -165,14 +180,16 @@ func TestFullIntegration(t *testing.T) {
 	mockOllamaPort := 11435 // Use different port to avoid conflicts
 	mockOllama := NewMockOllamaServer(mockOllamaPort)
 	go func() {
-		if err := mockOllama.Start(); err != nil && err != http.ErrServerClosed {
-			t.Errorf("Mock Ollama server failed: %v", err)
+		if startErr := mockOllama.Start(); startErr != nil && startErr != http.ErrServerClosed {
+			t.Errorf("Mock Ollama server failed: %v", startErr)
 		}
 	}()
 	defer func() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
-		mockOllama.Stop(shutdownCtx)
+		if stopErr := mockOllama.Stop(shutdownCtx); stopErr != nil {
+			t.Logf("Failed to stop mock Ollama server: %v", stopErr)
+		}
 	}()
 
 	// Give the mock server time to start
@@ -237,14 +254,16 @@ func TestFullIntegration(t *testing.T) {
 	t.Log("Step 5: Starting Consumer HTTP Server")
 	consumerPort := 9003 // Use different port to avoid conflicts
 	go func() {
-		if err := consumerInstance.StartHTTPServer(consumerPort); err != nil && err != http.ErrServerClosed {
-			t.Errorf("Consumer HTTP server failed: %v", err)
+		if startErr := consumerInstance.StartHTTPServer(consumerPort); startErr != nil && startErr != http.ErrServerClosed {
+			t.Errorf("Consumer HTTP server failed: %v", startErr)
 		}
 	}()
 	defer func() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
-		consumerInstance.StopHTTPServer(shutdownCtx)
+		if stopErr := consumerInstance.StopHTTPServer(shutdownCtx); stopErr != nil {
+			t.Logf("Failed to stop HTTP server: %v", stopErr)
+		}
 	}()
 
 	// Give the HTTP server time to start
@@ -366,11 +385,20 @@ func TestFullIntegration(t *testing.T) {
 	url := fmt.Sprintf("http://localhost:%d/api/chat", consumerPort)
 	t.Logf("Sending request to: %s", url)
 
+	// Validate URL is localhost for security
+	if !strings.HasPrefix(url, "http://localhost:") {
+		t.Fatalf("Invalid URL for testing: %s", url)
+	}
+
 	resp, err := http.Post(url, "application/json", bytes.NewBuffer(requestJSON))
 	if err != nil {
 		t.Fatalf("Failed to send HTTP request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			t.Logf("Failed to close response body: %v", closeErr)
+		}
+	}()
 
 	// Check HTTP status code
 	if resp.StatusCode != http.StatusOK {
@@ -443,7 +471,9 @@ func TestMockOllamaServer(t *testing.T) {
 	defer func() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
-		mockOllama.Stop(shutdownCtx)
+		if stopErr := mockOllama.Stop(shutdownCtx); stopErr != nil {
+			t.Logf("Failed to stop mock Ollama server: %v", stopErr)
+		}
 	}()
 
 	// Give the server time to start
@@ -467,11 +497,21 @@ func TestMockOllamaServer(t *testing.T) {
 	}
 
 	url := fmt.Sprintf("http://localhost:%d/api/chat", mockOllama.GetPort())
+
+	// Validate URL is localhost for security
+	if !strings.HasPrefix(url, "http://localhost:") {
+		t.Fatalf("Invalid URL for testing: %s", url)
+	}
+
 	resp, err := http.Post(url, "application/json", bytes.NewBuffer(requestJSON))
 	if err != nil {
 		t.Fatalf("Failed to send HTTP request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			t.Logf("Failed to close response body: %v", closeErr)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected HTTP 200, got %d", resp.StatusCode)

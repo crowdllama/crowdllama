@@ -29,7 +29,11 @@ func TestConsumerDHTIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() {
+		if removeErr := os.RemoveAll(tempDir); removeErr != nil {
+			t.Logf("Failed to remove temp dir: %v", removeErr)
+		}
+	}()
 
 	// Create temporary keys for DHT server and consumer
 	dhtKeyPath := filepath.Join(tempDir, "dht.key")
@@ -196,7 +200,11 @@ func TestConsumerWithEmptyBootstrapPeers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() {
+		if removeErr := os.RemoveAll(tempDir); removeErr != nil {
+			t.Logf("Failed to remove temp dir: %v", removeErr)
+		}
+	}()
 
 	// Create a temporary key for testing
 	keyPath := filepath.Join(tempDir, "consumer.key")
@@ -249,7 +257,11 @@ func TestConsumerWithNilBootstrapPeers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() {
+		if removeErr := os.RemoveAll(tempDir); removeErr != nil {
+			t.Logf("Failed to remove temp dir: %v", removeErr)
+		}
+	}()
 
 	// Create a temporary key for testing
 	keyPath := filepath.Join(tempDir, "consumer.key")

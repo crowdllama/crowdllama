@@ -170,7 +170,12 @@ func NewWorkerWithBootstrapPeers(ctx context.Context, privKey crypto.PrivKey, bo
 }
 
 // NewWorkerWithBootstrapPeersAndOllamaURL creates a new worker instance with custom bootstrap peers and Ollama URL
-func NewWorkerWithBootstrapPeersAndOllamaURL(ctx context.Context, privKey crypto.PrivKey, bootstrapPeers []string, ollamaURL string) (*Worker, error) {
+func NewWorkerWithBootstrapPeersAndOllamaURL(
+	ctx context.Context,
+	privKey crypto.PrivKey,
+	bootstrapPeers []string,
+	ollamaURL string,
+) (*Worker, error) {
 	h, kadDHT, err := discovery.NewHostAndDHT(ctx, privKey)
 	if err != nil {
 		return nil, fmt.Errorf("new host and DHT: %w", err)

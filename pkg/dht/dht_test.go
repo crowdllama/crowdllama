@@ -24,7 +24,11 @@ func TestNewDHTServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() {
+		if removeErr := os.RemoveAll(tempDir); removeErr != nil {
+			t.Logf("Failed to remove temp dir: %v", removeErr)
+		}
+	}()
 
 	// Create a temporary key for testing
 	keyPath := filepath.Join(tempDir, "dht.key")
@@ -68,7 +72,7 @@ func TestNewDHTServer(t *testing.T) {
 	}
 
 	// Should contain /p2p/ which indicates it's a libp2p address
-	if len(primaryAddr) > 0 && primaryAddr[:4] != "/ip4" {
+	if primaryAddr != "" && primaryAddr[:4] != "/ip4" {
 		t.Errorf("Primary address should start with /ip4: %s", primaryAddr)
 	}
 
@@ -89,7 +93,11 @@ func TestNewDHTServerWithCustomAddrs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() {
+		if removeErr := os.RemoveAll(tempDir); removeErr != nil {
+			t.Logf("Failed to remove temp dir: %v", removeErr)
+		}
+	}()
 
 	// Create a temporary key for testing
 	keyPath := filepath.Join(tempDir, "dht.key")
@@ -156,7 +164,11 @@ func TestNewDHTServerWithEmptyAddrs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() {
+		if removeErr := os.RemoveAll(tempDir); removeErr != nil {
+			t.Logf("Failed to remove temp dir: %v", removeErr)
+		}
+	}()
 
 	// Create a temporary key for testing
 	keyPath := filepath.Join(tempDir, "dht.key")
@@ -206,7 +218,11 @@ func TestNewDHTServerWithNilAddrs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() {
+		if removeErr := os.RemoveAll(tempDir); removeErr != nil {
+			t.Logf("Failed to remove temp dir: %v", removeErr)
+		}
+	}()
 
 	// Create a temporary key for testing
 	keyPath := filepath.Join(tempDir, "dht.key")
@@ -261,7 +277,11 @@ func TestDHTServerStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() {
+		if removeErr := os.RemoveAll(tempDir); removeErr != nil {
+			t.Logf("Failed to remove temp dir: %v", removeErr)
+		}
+	}()
 
 	// Create a temporary key for testing
 	keyPath := filepath.Join(tempDir, "dht.key")

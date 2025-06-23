@@ -97,7 +97,7 @@ func runDHTServer() error {
 	return nil
 }
 
-func printHostInfo(server *dht.DHTServer, logger *zap.Logger) {
+func printHostInfo(server *dht.Server, logger *zap.Logger) {
 	logger.Info("DHT Server information",
 		zap.String("peer_id", server.GetPeerID()))
 
@@ -107,7 +107,7 @@ func printHostInfo(server *dht.DHTServer, logger *zap.Logger) {
 	}
 }
 
-func waitForShutdown(logger *zap.Logger, server *dht.DHTServer) {
+func waitForShutdown(logger *zap.Logger, server *dht.Server) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh

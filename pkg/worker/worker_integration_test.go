@@ -30,7 +30,11 @@ func TestWorkerDHTIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() {
+		if removeErr := os.RemoveAll(tempDir); removeErr != nil {
+			t.Logf("Failed to remove temp dir: %v", removeErr)
+		}
+	}()
 
 	// Create temporary keys for DHT server and worker
 	dhtKeyPath := filepath.Join(tempDir, "dht.key")

@@ -26,8 +26,8 @@ var DefaultListenAddrs = []string{
 	"/ip4/0.0.0.0/udp/9000/quic-v1",
 }
 
-// DHTServer represents a DHT server instance
-type DHTServer struct {
+// Server represents a DHT server instance
+type Server struct {
 	Host      host.Host
 	DHT       *dht.IpfsDHT
 	logger    *zap.Logger
@@ -37,12 +37,12 @@ type DHTServer struct {
 }
 
 // NewDHTServer creates a new DHT server instance
-func NewDHTServer(ctx context.Context, privKey crypto.PrivKey, logger *zap.Logger) (*DHTServer, error) {
+func NewDHTServer(ctx context.Context, privKey crypto.PrivKey, logger *zap.Logger) (*Server, error) {
 	return NewDHTServerWithAddrs(ctx, privKey, logger, DefaultListenAddrs)
 }
 
 // NewDHTServerWithAddrs creates a new DHT server instance with custom listen addresses
-func NewDHTServerWithAddrs(ctx context.Context, privKey crypto.PrivKey, logger *zap.Logger, listenAddrs []string) (*DHTServer, error) {
+func NewDHTServerWithAddrs(ctx context.Context, privKey crypto.PrivKey, logger *zap.Logger, listenAddrs []string) (*Server, error) {
 	// If no listen addresses provided, fallback to defaults
 	if len(listenAddrs) == 0 {
 		listenAddrs = DefaultListenAddrs
@@ -82,7 +82,7 @@ func NewDHTServerWithAddrs(ctx context.Context, privKey crypto.PrivKey, logger *
 
 	serverCtx, cancel := context.WithCancel(ctx)
 
-	server := &DHTServer{
+	server := &Server{
 		Host:      h,
 		DHT:       kadDHT,
 		logger:    logger,
@@ -100,7 +100,7 @@ func NewDHTServerWithAddrs(ctx context.Context, privKey crypto.PrivKey, logger *
 }
 
 // Start starts the DHT server and returns the primary peer address
-func (s *DHTServer) Start() (string, error) {
+func (s *Server) Start() (string, error) {
 	// Set up network notifier to detect new connections
 	s.Host.Network().Notify(&network.NotifyBundle{
 		ConnectedF: func(_ network.Network, conn network.Conn) {
@@ -133,24 +133,26 @@ func (s *DHTServer) Start() (string, error) {
 }
 
 // Stop stops the DHT server
-func (s *DHTServer) Stop() {
+func (s *Server) Stop() {
 	s.logger.Info("Stopping DHT server...")
 	s.cancel()
-	s.Host.Close()
+	if err := s.Host.Close(); err != nil {
+		s.logger.Error("Failed to close host", zap.Error(err))
+	}
 }
 
 // GetPeerID returns the DHT server's peer ID
-func (s *DHTServer) GetPeerID() string {
+func (s *Server) GetPeerID() string {
 	return s.Host.ID().String()
 }
 
 // GetPeerAddrs returns all peer addresses in the required format
-func (s *DHTServer) GetPeerAddrs() []string {
+func (s *Server) GetPeerAddrs() []string {
 	return s.peerAddrs
 }
 
 // GetPrimaryPeerAddr returns the primary peer address (first in the list)
-func (s *DHTServer) GetPrimaryPeerAddr() string {
+func (s *Server) GetPrimaryPeerAddr() string {
 	if len(s.peerAddrs) > 0 {
 		return s.peerAddrs[0]
 	}
@@ -158,7 +160,7 @@ func (s *DHTServer) GetPrimaryPeerAddr() string {
 }
 
 // GetPeers returns all connected peer IDs
-func (s *DHTServer) GetPeers() []string {
+func (s *Server) GetPeers() []string {
 	peers := s.Host.Network().Peers()
 	peerIDs := make([]string, 0, len(peers))
 	for _, p := range peers {
@@ -168,7 +170,7 @@ func (s *DHTServer) GetPeers() []string {
 }
 
 // HasPeer checks if a specific peer ID is connected
-func (s *DHTServer) HasPeer(peerID string) bool {
+func (s *Server) HasPeer(peerID string) bool {
 	peers := s.Host.Network().Peers()
 	for _, p := range peers {
 		if p.String() == peerID {
@@ -179,12 +181,12 @@ func (s *DHTServer) HasPeer(peerID string) bool {
 }
 
 // GetConnectedPeersCount returns the number of connected peers
-func (s *DHTServer) GetConnectedPeersCount() int {
+func (s *Server) GetConnectedPeersCount() int {
 	return len(s.Host.Network().Peers())
 }
 
 // discoverWorkersPeriodically periodically discovers workers advertising the namespace
-func (s *DHTServer) discoverWorkersPeriodically() {
+func (s *Server) discoverWorkersPeriodically() {
 	ticker := time.NewTicker(10 * time.Second) // Run every 10 seconds for testing
 	defer ticker.Stop()
 
@@ -241,7 +243,7 @@ func (s *DHTServer) discoverWorkersPeriodically() {
 }
 
 // getWorkerNamespaceCID generates the same namespace CID as the worker
-func (s *DHTServer) getWorkerNamespaceCID() cid.Cid {
+func (s *Server) getWorkerNamespaceCID() cid.Cid {
 	namespaceCID, err := discovery.GetWorkerNamespaceCID()
 	if err != nil {
 		panic("Failed to get namespace CID: " + err.Error())
@@ -250,7 +252,7 @@ func (s *DHTServer) getWorkerNamespaceCID() cid.Cid {
 }
 
 // requestWorkerMetadata requests metadata from a worker peer
-func (s *DHTServer) requestWorkerMetadata(ctx context.Context, workerPeer peer.ID) (*crowdllama.Resource, error) {
+func (s *Server) requestWorkerMetadata(ctx context.Context, workerPeer peer.ID) (*crowdllama.Resource, error) {
 	metadata, err := discovery.RequestWorkerMetadata(ctx, s.Host, workerPeer, s.logger)
 	if err != nil {
 		return nil, fmt.Errorf("request worker metadata: %w", err)
@@ -259,7 +261,7 @@ func (s *DHTServer) requestWorkerMetadata(ctx context.Context, workerPeer peer.I
 }
 
 // multiaddrsToStrings converts multiaddrs to string slice for logging
-func (s *DHTServer) multiaddrsToStrings(addrs []multiaddr.Multiaddr) []string {
+func (s *Server) multiaddrsToStrings(addrs []multiaddr.Multiaddr) []string {
 	result := make([]string, len(addrs))
 	for i, addr := range addrs {
 		result[i] = addr.String()

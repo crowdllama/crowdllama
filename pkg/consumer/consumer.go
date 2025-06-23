@@ -84,7 +84,12 @@ func NewConsumer(ctx context.Context, logger *zap.Logger, privKey crypto.PrivKey
 }
 
 // NewConsumerWithBootstrapPeers creates a new consumer instance with custom bootstrap peers
-func NewConsumerWithBootstrapPeers(ctx context.Context, logger *zap.Logger, privKey crypto.PrivKey, bootstrapPeers []string) (*Consumer, error) {
+func NewConsumerWithBootstrapPeers(
+	ctx context.Context,
+	logger *zap.Logger,
+	privKey crypto.PrivKey,
+	bootstrapPeers []string,
+) (*Consumer, error) {
 	h, kadDHT, err := discovery.NewHostAndDHT(ctx, privKey)
 	if err != nil {
 		return nil, fmt.Errorf("new host and DHT: %w", err)
