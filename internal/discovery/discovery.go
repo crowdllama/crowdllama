@@ -17,10 +17,11 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
 	"github.com/multiformats/go-multiaddr"
 	"github.com/multiformats/go-multihash"
 	"go.uber.org/zap"
+
+	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
 )
 
 // advertiseInterval is the interval at which the model is advertised to the DHT:
