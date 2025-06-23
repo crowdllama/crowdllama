@@ -1,5 +1,7 @@
 # CrowdLlama
 
+[![CI](https://github.com/matiasinsaurralde/crowdllama/actions/workflows/ci.yml/badge.svg)](https://github.com/matiasinsaurralde/crowdllama/actions/workflows/ci.yml)
+
 <img src="image.png" alt="CrowdLlama" width="50%">
 
 CrowdLlama is a distributed system that leverages the open-source [Ollama project](https://github.com/ollama/ollama) to run LLM inference tasks across multiple nodes using peer-to-peer (P2P) networking, enabling collaborative large language model inference workloads.
