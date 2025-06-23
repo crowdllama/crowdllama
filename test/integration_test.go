@@ -14,11 +14,12 @@ import (
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/crypto"
+	"go.uber.org/zap"
+
 	"github.com/matiasinsaurralde/crowdllama/internal/keys"
 	"github.com/matiasinsaurralde/crowdllama/pkg/consumer"
 	"github.com/matiasinsaurralde/crowdllama/pkg/dht"
 	"github.com/matiasinsaurralde/crowdllama/pkg/worker"
-	"go.uber.org/zap"
 )
 
 // MockOllamaServer represents a mock Ollama API server
