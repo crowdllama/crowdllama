@@ -12,6 +12,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/matiasinsaurralde/crowdllama/internal/keys"
 	"github.com/matiasinsaurralde/crowdllama/pkg/config"
 	"github.com/matiasinsaurralde/crowdllama/pkg/consumer"
@@ -46,19 +47,15 @@ func runConsumer() error {
 	startCmd := flag.NewFlagSet("start", flag.ExitOnError)
 	port := startCmd.Int("port", consumer.DefaultHTTPPort, "HTTP server port")
 
-	// Initialize configuration
-	cfg := config.NewConfiguration()
-	cfg.ParseFlags(startCmd)
-
-	if err := startCmd.Parse(os.Args[2:]); err != nil {
-		return fmt.Errorf("failed to parse args: %w", err)
+	cfg, err := parseConsumerConfig(startCmd)
+	if err != nil {
+		return err
 	}
 
-	// Setup logger
-	if err := cfg.SetupLogger(); err != nil {
-		return fmt.Errorf("failed to setup logger: %w", err)
+	logger, err := setupConsumerLogger(cfg)
+	if err != nil {
+		return err
 	}
-	logger := cfg.GetLogger()
 	defer func() {
 		if err := logger.Sync(); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to sync logger: %v\n", err)
@@ -68,26 +65,11 @@ func runConsumer() error {
 	if cfg.IsVerbose() {
 		logger.Info("Verbose mode enabled")
 	}
-
 	logger.Info("Starting CrowdLlama consumer")
 
-	// Determine key path
-	keyPath := cfg.KeyPath
-	if keyPath == "" {
-		defaultPath, err := keys.GetDefaultKeyPath("consumer")
-		if err != nil {
-			return fmt.Errorf("failed to get default key path: %w", err)
-		}
-		keyPath = defaultPath
-	}
-
-	// Initialize key manager
-	keyManager := keys.NewKeyManager(keyPath, logger)
-
-	// Get or create private key
-	privKey, err := keyManager.GetOrCreatePrivateKey()
+	privKey, err := getConsumerPrivateKey(cfg, logger)
 	if err != nil {
-		return fmt.Errorf("failed to get or create private key: %w", err)
+		return err
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -98,29 +80,66 @@ func runConsumer() error {
 		return fmt.Errorf("failed to initialize consumer: %w", err)
 	}
 
-	// Start background worker discovery
+	startConsumerServices(c, *port, logger)
+	waitForShutdownSignal(c, logger)
+
+	return nil
+}
+
+func parseConsumerConfig(startCmd *flag.FlagSet) (*config.Configuration, error) {
+	cfg := config.NewConfiguration()
+	cfg.ParseFlags(startCmd)
+	if err := startCmd.Parse(os.Args[2:]); err != nil {
+		return nil, fmt.Errorf("failed to parse args: %w", err)
+	}
+	return cfg, nil
+}
+
+func setupConsumerLogger(cfg *config.Configuration) (*zap.Logger, error) {
+	if err := cfg.SetupLogger(); err != nil {
+		return nil, fmt.Errorf("failed to setup logger: %w", err)
+	}
+	return cfg.GetLogger(), nil
+}
+
+func getConsumerPrivateKey(cfg *config.Configuration, logger *zap.Logger) (crypto.PrivKey, error) {
+	keyPath := cfg.KeyPath
+	if keyPath == "" {
+		defaultPath, err := keys.GetDefaultKeyPath("consumer")
+		if err != nil {
+			return nil, fmt.Errorf("failed to get default key path: %w", err)
+		}
+		keyPath = defaultPath
+	}
+	keyManager := keys.NewKeyManager(keyPath, logger)
+	privKey, err := keyManager.GetOrCreatePrivateKey()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get or create private key: %w", err)
+	}
+	return privKey, nil
+}
+
+func startConsumerServices(c *consumer.Consumer, port int, logger *zap.Logger) {
 	c.StartBackgroundDiscovery()
 	logger.Info("Background worker discovery started")
 
-	// Start the HTTP server in a goroutine
 	go func() {
-		if err := c.StartHTTPServer(*port); err != nil {
+		if err := c.StartHTTPServer(port); err != nil {
 			logger.Fatal("HTTP server failed", zap.Error(err))
 		}
 	}()
+}
 
-	// Wait for shutdown signal
+func waitForShutdownSignal(c *consumer.Consumer, logger *zap.Logger) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
 
 	logger.Info("Shutting down consumer...")
 
-	// Stop background discovery
 	c.StopBackgroundDiscovery()
 	logger.Info("Background discovery stopped")
 
-	// Gracefully shutdown the HTTP server
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	if err := c.StopHTTPServer(shutdownCtx); err != nil {
@@ -128,5 +147,4 @@ func runConsumer() error {
 	}
 
 	logger.Info("Consumer shutdown complete")
-	return nil
 }
