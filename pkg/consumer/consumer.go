@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -463,7 +464,13 @@ func (c *Consumer) StartBackgroundDiscovery() {
 	c.logger.Info("Starting background worker discovery")
 
 	go func() {
-		ticker := time.NewTicker(DiscoveryInterval)
+		// Use shorter interval for testing environments
+		discoveryInterval := DiscoveryInterval
+		if os.Getenv("CROW DLLAMA_TEST_MODE") == "1" {
+			discoveryInterval = 2 * time.Second
+		}
+
+		ticker := time.NewTicker(discoveryInterval)
 		defer ticker.Stop()
 
 		// Run initial discovery immediately

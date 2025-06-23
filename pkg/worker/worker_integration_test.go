@@ -2,6 +2,8 @@ package worker
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -15,10 +17,40 @@ import (
 	"github.com/matiasinsaurralde/crowdllama/pkg/dht"
 )
 
+// getRandomPort returns a random available port
+func getRandomPort() (int, error) {
+	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
+	if err != nil {
+		return 0, fmt.Errorf("failed to resolve TCP address: %w", err)
+	}
+
+	l, err := net.ListenTCP("tcp", addr)
+	if err != nil {
+		return 0, fmt.Errorf("failed to listen on TCP address: %w", err)
+	}
+	defer func() {
+		if closeErr := l.Close(); closeErr != nil {
+			// Log the error but don't fail the test for this
+			fmt.Printf("Warning: failed to close listener: %v\n", closeErr)
+		}
+	}()
+
+	return l.Addr().(*net.TCPAddr).Port, nil
+}
+
 func TestWorkerDHTIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+
+	// Set test mode environment variable for shorter intervals
+	if err := os.Setenv("CROW DLLAMA_TEST_MODE", "1"); err != nil {
+		t.Logf("Failed to set test mode environment variable: %v", err)
+	}
+
+	// Enable test mode for shorter intervals
+	discovery.SetTestMode()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	logger, _ := zap.NewDevelopment()
@@ -63,7 +95,22 @@ func TestWorkerDHTIntegration(t *testing.T) {
 
 func stepInitDHTServerWorker(ctx context.Context, t *testing.T, dhtPrivKey crypto.PrivKey, logger *zap.Logger) *dht.Server {
 	t.Helper()
-	dhtServer, err := dht.NewDHTServer(ctx, dhtPrivKey, logger)
+
+	// Get a random available port to avoid conflicts between tests
+	dhtPort, err := getRandomPort()
+	if err != nil {
+		t.Fatalf("Failed to get random port for DHT server: %v", err)
+	}
+
+	// Use localhost addresses with dynamic port for testing to avoid network interface issues
+	testListenAddrs := []string{
+		fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", dhtPort),
+		fmt.Sprintf("/ip4/127.0.0.1/udp/%d/quic-v1", dhtPort),
+	}
+
+	t.Logf("Using DHT server port: %d", dhtPort)
+
+	dhtServer, err := dht.NewDHTServerWithAddrs(ctx, dhtPrivKey, logger, testListenAddrs)
 	if err != nil {
 		t.Fatalf("Failed to create DHT server: %v", err)
 	}
@@ -76,6 +123,10 @@ func stepStartDHTServerWorker(t *testing.T, dhtServer *dht.Server) string {
 	if err != nil {
 		t.Fatalf("Failed to start DHT server: %v", err)
 	}
+
+	// Add a delay to ensure the DHT server is fully ready
+	time.Sleep(2 * time.Second)
+
 	return dhtPeerAddr
 }
 
@@ -83,14 +134,37 @@ func stepLogDHTServerInfoWorker(t *testing.T, dhtServer *dht.Server, dhtPeerAddr
 	t.Helper()
 	t.Logf("DHT server started with peer address: %s", dhtPeerAddr)
 	t.Logf("DHT server peer ID: %s", dhtServer.GetPeerID())
+	t.Logf("DHT server all peer addresses: %v", dhtServer.GetPeerAddrs())
 }
 
 func stepInitWorker(ctx context.Context, t *testing.T, workerPrivKey crypto.PrivKey, dhtPeerAddr string) *Worker {
 	t.Helper()
-	worker, err := NewWorkerWithBootstrapPeers(ctx, workerPrivKey, []string{dhtPeerAddr})
-	if err != nil {
-		t.Fatalf("Failed to create worker: %v", err)
+
+	// Try to create worker with retry logic
+	var worker *Worker
+	var err error
+	maxRetries := 3
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		t.Logf("Attempt %d/%d: Creating worker with bootstrap peer: %s", attempt, maxRetries, dhtPeerAddr)
+
+		worker, err = NewWorkerWithBootstrapPeers(ctx, workerPrivKey, []string{dhtPeerAddr})
+		if err == nil {
+			t.Logf("✅ Worker created successfully on attempt %d", attempt)
+			break
+		}
+
+		t.Logf("❌ Failed to create worker on attempt %d: %v", attempt, err)
+		if attempt < maxRetries {
+			t.Logf("Retrying in 2 seconds...")
+			time.Sleep(2 * time.Second)
+		}
 	}
+
+	if err != nil {
+		t.Fatalf("Failed to create worker after %d attempts: %v", maxRetries, err)
+	}
+
 	return worker
 }
 

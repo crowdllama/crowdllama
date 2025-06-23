@@ -27,6 +27,16 @@ import (
 // advertiseInterval is the interval at which the model is advertised to the DHT:
 var advertiseInterval = 10 * time.Second
 
+// SetTestMode enables test mode with shorter intervals
+func SetTestMode() {
+	advertiseInterval = 2 * time.Second
+}
+
+// GetAdvertiseInterval returns the current advertisement interval
+func GetAdvertiseInterval() time.Duration {
+	return advertiseInterval
+}
+
 var defaultListenAddrs = []string{"/ip4/0.0.0.0/tcp/0"}
 
 const (

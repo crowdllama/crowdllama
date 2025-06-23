@@ -43,7 +43,7 @@ print_status "INFO" "Running integration tests..."
 # Run the mock Ollama server test
 echo ""
 print_status "INFO" "Testing Mock Ollama Server..."
-if go test -v ./tests/ -run TestMockOllamaServer; then
+if go test -v ./test/ -run TestMockOllamaServer; then
     print_status "PASS" "Mock Ollama Server test completed successfully"
 else
     print_status "FAIL" "Mock Ollama Server test failed"
@@ -63,7 +63,7 @@ echo "  6. Send an HTTP request and validate the response"
 echo ""
 
 # The test might show "FAIL" at the end due to graceful shutdown, but we check the actual test results
-if go test -v ./tests/ -run TestFullIntegration 2>&1 | tee /tmp/integration_test.log; then
+if go test -v ./test/ -run TestFullIntegration 2>&1 | tee /tmp/integration_test.log; then
     # Check if the test actually passed by looking for success messages
     if grep -q "✅ SUCCESS: Full integration test completed successfully" /tmp/integration_test.log; then
         print_status "PASS" "Full Integration Test completed successfully"

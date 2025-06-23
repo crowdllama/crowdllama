@@ -4,6 +4,7 @@ package dht
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/ipfs/go-cid"
@@ -187,13 +188,19 @@ func (s *Server) GetConnectedPeersCount() int {
 
 // discoverWorkersPeriodically periodically discovers workers advertising the namespace
 func (s *Server) discoverWorkersPeriodically() {
-	ticker := time.NewTicker(10 * time.Second) // Run every 10 seconds for testing
+	// Use shorter interval for testing environments
+	discoveryInterval := 10 * time.Second
+	if os.Getenv("CROW DLLAMA_TEST_MODE") == "1" {
+		discoveryInterval = 2 * time.Second
+	}
+
+	ticker := time.NewTicker(discoveryInterval) // Run every 2 seconds for testing
 	defer ticker.Stop()
 
 	namespaceCID := s.getWorkerNamespaceCID()
 	s.logger.Info("Starting periodic worker discovery",
 		zap.String("namespace_cid", namespaceCID.String()),
-		zap.Duration("interval", 10*time.Second))
+		zap.Duration("interval", discoveryInterval))
 
 	for {
 		select {

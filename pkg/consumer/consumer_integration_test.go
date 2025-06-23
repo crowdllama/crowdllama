@@ -2,6 +2,8 @@ package consumer
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,15 +12,46 @@ import (
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"go.uber.org/zap"
 
+	"github.com/matiasinsaurralde/crowdllama/internal/discovery"
 	"github.com/matiasinsaurralde/crowdllama/internal/keys"
 	"github.com/matiasinsaurralde/crowdllama/pkg/dht"
 )
+
+// getRandomPort returns a random available port
+func getRandomPort() (int, error) {
+	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
+	if err != nil {
+		return 0, fmt.Errorf("failed to resolve TCP address: %w", err)
+	}
+
+	l, err := net.ListenTCP("tcp", addr)
+	if err != nil {
+		return 0, fmt.Errorf("failed to listen on TCP address: %w", err)
+	}
+	defer func() {
+		if closeErr := l.Close(); closeErr != nil {
+			// Log the error but don't fail the test for this
+			fmt.Printf("Warning: failed to close listener: %v\n", closeErr)
+		}
+	}()
+
+	return l.Addr().(*net.TCPAddr).Port, nil
+}
 
 func TestConsumerDHTIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+
+	// Set test mode environment variable for shorter intervals
+	if err := os.Setenv("CROW DLLAMA_TEST_MODE", "1"); err != nil {
+		t.Logf("Failed to set test mode environment variable: %v", err)
+	}
+
+	// Enable test mode for shorter intervals
+	discovery.SetTestMode()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	logger, _ := zap.NewDevelopment()
 
@@ -61,7 +94,22 @@ func TestConsumerDHTIntegration(t *testing.T) {
 
 func stepInitDHTServer(ctx context.Context, t *testing.T, dhtPrivKey crypto.PrivKey, logger *zap.Logger) *dht.Server {
 	t.Helper()
-	dhtServer, err := dht.NewDHTServer(ctx, dhtPrivKey, logger)
+
+	// Get a random available port to avoid conflicts between tests
+	dhtPort, err := getRandomPort()
+	if err != nil {
+		t.Fatalf("Failed to get random port for DHT server: %v", err)
+	}
+
+	// Use localhost addresses with dynamic port for testing to avoid network interface issues
+	testListenAddrs := []string{
+		fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", dhtPort),
+		fmt.Sprintf("/ip4/127.0.0.1/udp/%d/quic-v1", dhtPort),
+	}
+
+	t.Logf("Using DHT server port: %d", dhtPort)
+
+	dhtServer, err := dht.NewDHTServerWithAddrs(ctx, dhtPrivKey, logger, testListenAddrs)
 	if err != nil {
 		t.Fatalf("Failed to create DHT server: %v", err)
 	}

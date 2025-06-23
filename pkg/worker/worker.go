@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/ipfs/go-cid"
@@ -293,7 +294,13 @@ func (w *Worker) PublishMetadata(ctx context.Context) error {
 // AdvertiseModel periodically announces model availability and advertises the worker using Provide
 func (w *Worker) AdvertiseModel(ctx context.Context, _ string) {
 	go func() {
-		ticker := time.NewTicker(3 * time.Second)
+		// Use shorter interval for testing environments
+		advertiseInterval := 1 * time.Second
+		if os.Getenv("CROW DLLAMA_TEST_MODE") == "1" {
+			advertiseInterval = 500 * time.Millisecond
+		}
+
+		ticker := time.NewTicker(advertiseInterval)
 		defer ticker.Stop()
 
 		// Get the namespace CID using the unified function
