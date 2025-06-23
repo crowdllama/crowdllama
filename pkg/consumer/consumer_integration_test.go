@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"go.uber.org/zap"
 
-	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/matiasinsaurralde/crowdllama/internal/keys"
 	"github.com/matiasinsaurralde/crowdllama/pkg/dht"
 )
@@ -45,12 +45,12 @@ func TestConsumerDHTIntegration(t *testing.T) {
 		t.Fatalf("Failed to create consumer private key: %v", err)
 	}
 
-	dhtServer := stepInitDHTServer(t, ctx, dhtPrivKey, logger)
+	dhtServer := stepInitDHTServer(ctx, t, dhtPrivKey, logger)
 	defer dhtServer.Stop()
 	dhtPeerAddr := stepStartDHTServer(t, dhtServer)
 	stepLogDHTServerInfo(t, dhtServer, dhtPeerAddr)
 
-	consumer := stepInitConsumer(t, ctx, logger, consumerPrivKey, dhtPeerAddr)
+	consumer := stepInitConsumer(ctx, t, logger, consumerPrivKey, dhtPeerAddr)
 	stepLogConsumerInfo(t, consumer)
 	stepWaitForConsumerDiscovery(t, dhtServer, consumer)
 	stepValidateWorkerDiscovery(t, consumer)
@@ -59,7 +59,7 @@ func TestConsumerDHTIntegration(t *testing.T) {
 	t.Log("Integration test completed successfully")
 }
 
-func stepInitDHTServer(t *testing.T, ctx context.Context, dhtPrivKey crypto.PrivKey, logger *zap.Logger) *dht.Server {
+func stepInitDHTServer(ctx context.Context, t *testing.T, dhtPrivKey crypto.PrivKey, logger *zap.Logger) *dht.Server {
 	t.Helper()
 	dhtServer, err := dht.NewDHTServer(ctx, dhtPrivKey, logger)
 	if err != nil {
@@ -83,7 +83,7 @@ func stepLogDHTServerInfo(t *testing.T, dhtServer *dht.Server, dhtPeerAddr strin
 	t.Logf("DHT server peer ID: %s", dhtServer.GetPeerID())
 }
 
-func stepInitConsumer(t *testing.T, ctx context.Context, logger *zap.Logger, consumerPrivKey crypto.PrivKey, dhtPeerAddr string) *Consumer {
+func stepInitConsumer(ctx context.Context, t *testing.T, logger *zap.Logger, consumerPrivKey crypto.PrivKey, dhtPeerAddr string) *Consumer {
 	t.Helper()
 	consumer, err := NewConsumerWithBootstrapPeers(ctx, logger, consumerPrivKey, []string{dhtPeerAddr})
 	if err != nil {

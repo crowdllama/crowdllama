@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"go.uber.org/zap"
 
-	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/matiasinsaurralde/crowdllama/internal/discovery"
 	"github.com/matiasinsaurralde/crowdllama/internal/keys"
 	"github.com/matiasinsaurralde/crowdllama/pkg/dht"
@@ -46,22 +46,22 @@ func TestWorkerDHTIntegration(t *testing.T) {
 		t.Fatalf("Failed to create worker private key: %v", err)
 	}
 
-	dhtServer := stepInitDHTServerWorker(t, ctx, dhtPrivKey, logger)
+	dhtServer := stepInitDHTServerWorker(ctx, t, dhtPrivKey, logger)
 	defer dhtServer.Stop()
 	dhtPeerAddr := stepStartDHTServerWorker(t, dhtServer)
 	stepLogDHTServerInfoWorker(t, dhtServer, dhtPeerAddr)
 
-	worker := stepInitWorker(t, ctx, workerPrivKey, dhtPeerAddr)
+	worker := stepInitWorker(ctx, t, workerPrivKey, dhtPeerAddr)
 	stepSetupWorkerMetadata(t, worker)
-	stepAdvertiseWorker(t, ctx, worker)
+	stepAdvertiseWorker(ctx, t, worker)
 	stepLogWorkerInfo(t, worker)
 	stepWaitForWorkerDiscovery(t, dhtServer, worker)
-	stepValidateWorkerAdvertisement(t, ctx, dhtServer, worker, logger)
-	stepTestMetadataRetrieval(t, ctx, dhtServer, worker, logger)
+	stepValidateWorkerAdvertisement(ctx, t, dhtServer, worker)
+	stepTestMetadataRetrieval(ctx, t, dhtServer, worker, logger)
 	t.Log("Integration test completed successfully")
 }
 
-func stepInitDHTServerWorker(t *testing.T, ctx context.Context, dhtPrivKey crypto.PrivKey, logger *zap.Logger) *dht.Server {
+func stepInitDHTServerWorker(ctx context.Context, t *testing.T, dhtPrivKey crypto.PrivKey, logger *zap.Logger) *dht.Server {
 	t.Helper()
 	dhtServer, err := dht.NewDHTServer(ctx, dhtPrivKey, logger)
 	if err != nil {
@@ -85,7 +85,7 @@ func stepLogDHTServerInfoWorker(t *testing.T, dhtServer *dht.Server, dhtPeerAddr
 	t.Logf("DHT server peer ID: %s", dhtServer.GetPeerID())
 }
 
-func stepInitWorker(t *testing.T, ctx context.Context, workerPrivKey crypto.PrivKey, dhtPeerAddr string) *Worker {
+func stepInitWorker(ctx context.Context, t *testing.T, workerPrivKey crypto.PrivKey, dhtPeerAddr string) *Worker {
 	t.Helper()
 	worker, err := NewWorkerWithBootstrapPeers(ctx, workerPrivKey, []string{dhtPeerAddr})
 	if err != nil {
@@ -106,7 +106,7 @@ func stepSetupWorkerMetadata(t *testing.T, worker *Worker) {
 	)
 }
 
-func stepAdvertiseWorker(t *testing.T, ctx context.Context, worker *Worker) {
+func stepAdvertiseWorker(ctx context.Context, t *testing.T, worker *Worker) {
 	t.Helper()
 	worker.AdvertiseModel(ctx, "test-namespace")
 }
@@ -150,7 +150,7 @@ func stepWaitForWorkerDiscovery(t *testing.T, dhtServer *dht.Server, worker *Wor
 	}
 }
 
-func stepValidateWorkerAdvertisement(t *testing.T, ctx context.Context, dhtServer *dht.Server, worker *Worker, logger *zap.Logger) {
+func stepValidateWorkerAdvertisement(ctx context.Context, t *testing.T, dhtServer *dht.Server, worker *Worker) {
 	t.Helper()
 	t.Log("Step 4: Validating worker advertisement")
 	time.Sleep(3 * time.Second)
@@ -183,7 +183,7 @@ func stepValidateWorkerAdvertisement(t *testing.T, ctx context.Context, dhtServe
 	}
 }
 
-func stepTestMetadataRetrieval(t *testing.T, ctx context.Context, dhtServer *dht.Server, worker *Worker, logger *zap.Logger) {
+func stepTestMetadataRetrieval(ctx context.Context, t *testing.T, dhtServer *dht.Server, worker *Worker, logger *zap.Logger) {
 	t.Helper()
 	t.Log("Step 5: Testing metadata retrieval")
 	metadata, err := discovery.RequestWorkerMetadata(ctx, dhtServer.Host, worker.Host.ID(), logger)
@@ -191,7 +191,8 @@ func stepTestMetadataRetrieval(t *testing.T, ctx context.Context, dhtServer *dht
 		t.Errorf("Failed to request metadata from worker: %v", err)
 	} else {
 		t.Logf("✅ SUCCESS: Retrieved metadata from worker")
-		t.Logf("Worker metadata - GPU Model: %s, VRAM: %dGB, Throughput: %.2f tokens/sec", metadata.GPUModel, metadata.VRAMGB, metadata.TokensThroughput)
+		t.Logf("Worker metadata - GPU Model: %s, VRAM: %dGB, Throughput: %.2f tokens/sec",
+			metadata.GPUModel, metadata.VRAMGB, metadata.TokensThroughput)
 		t.Logf("Supported models: %v", metadata.SupportedModels)
 	}
 }
