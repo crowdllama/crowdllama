@@ -48,13 +48,14 @@ type OllamaResponse struct {
 
 // Worker represents a CrowdLlama worker node
 type Worker struct {
-	Host     host.Host
-	DHT      *dht.IpfsDHT
-	Metadata *crowdllama.Resource
+	Host      host.Host
+	DHT       *dht.IpfsDHT
+	Metadata  *crowdllama.Resource
+	OllamaURL string // Configurable Ollama URL for testing
 }
 
 // handleInferenceRequest processes an inference request from a consumer
-func handleInferenceRequest(ctx context.Context, s network.Stream) {
+func handleInferenceRequest(ctx context.Context, s network.Stream, ollamaURL string) {
 	defer func() {
 		if err := s.Close(); err != nil {
 			log.Printf("failed to close stream: %v", err)
@@ -97,8 +98,13 @@ func handleInferenceRequest(ctx context.Context, s network.Stream) {
 		return
 	}
 
+	// Use configurable Ollama URL, fallback to default if not set
+	if ollamaURL == "" {
+		ollamaURL = "http://localhost:11434/api/chat"
+	}
+
 	// Make HTTP POST request to Ollama API
-	req, err := http.NewRequestWithContext(ctx, "POST", "http://localhost:11434/api/chat", bytes.NewBuffer(reqBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", ollamaURL, bytes.NewBuffer(reqBody))
 	if err != nil {
 		log.Printf("Failed to create HTTP request: %v", err)
 		return
@@ -160,6 +166,11 @@ func NewWorker(ctx context.Context, privKey crypto.PrivKey) (*Worker, error) {
 
 // NewWorkerWithBootstrapPeers creates a new worker instance with custom bootstrap peers
 func NewWorkerWithBootstrapPeers(ctx context.Context, privKey crypto.PrivKey, bootstrapPeers []string) (*Worker, error) {
+	return NewWorkerWithBootstrapPeersAndOllamaURL(ctx, privKey, bootstrapPeers, "")
+}
+
+// NewWorkerWithBootstrapPeersAndOllamaURL creates a new worker instance with custom bootstrap peers and Ollama URL
+func NewWorkerWithBootstrapPeersAndOllamaURL(ctx context.Context, privKey crypto.PrivKey, bootstrapPeers []string, ollamaURL string) (*Worker, error) {
 	h, kadDHT, err := discovery.NewHostAndDHT(ctx, privKey)
 	if err != nil {
 		return nil, fmt.Errorf("new host and DHT: %w", err)
@@ -178,16 +189,17 @@ func NewWorkerWithBootstrapPeers(ctx context.Context, privKey crypto.PrivKey, bo
 
 	fmt.Println("BootstrapDHT ok")
 	h.SetStreamHandler(consumer.InferenceProtocol, func(s network.Stream) {
-		handleInferenceRequest(ctx, s)
+		handleInferenceRequest(ctx, s, ollamaURL)
 	})
 
 	// Initialize metadata
 	metadata := crowdllama.NewCrowdLlamaResource(h.ID().String())
 
 	return &Worker{
-		Host:     h,
-		DHT:      kadDHT,
-		Metadata: metadata,
+		Host:      h,
+		DHT:       kadDHT,
+		Metadata:  metadata,
+		OllamaURL: ollamaURL,
 	}, nil
 }
 
