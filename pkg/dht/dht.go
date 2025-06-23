@@ -43,6 +43,12 @@ func NewDHTServer(ctx context.Context, privKey crypto.PrivKey, logger *zap.Logge
 
 // NewDHTServerWithAddrs creates a new DHT server instance with custom listen addresses
 func NewDHTServerWithAddrs(ctx context.Context, privKey crypto.PrivKey, logger *zap.Logger, listenAddrs []string) (*DHTServer, error) {
+	// If no listen addresses provided, fallback to defaults
+	if len(listenAddrs) == 0 {
+		listenAddrs = DefaultListenAddrs
+		logger.Debug("No listen addresses provided, using defaults", zap.Strings("default_addrs", DefaultListenAddrs))
+	}
+
 	logger.Debug("Creating libp2p host with identity",
 		zap.Strings("listen_addrs", listenAddrs))
 
@@ -67,6 +73,11 @@ func NewDHTServerWithAddrs(ctx context.Context, privKey crypto.PrivKey, logger *
 	for _, addr := range h.Addrs() {
 		fullAddr := fmt.Sprintf("%s/p2p/%s", addr.String(), h.ID().String())
 		peerAddrs = append(peerAddrs, fullAddr)
+	}
+
+	// Ensure we have at least one peer address
+	if len(peerAddrs) == 0 {
+		logger.Warn("No peer addresses generated, this may indicate a configuration issue")
 	}
 
 	serverCtx, cancel := context.WithCancel(ctx)
