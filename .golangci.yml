@@ -68,8 +68,8 @@ linters:
         - octalLiteral
         - whyNoLint
         - wrapperFunc
-exclusions:
-  rules:
+issues:
+  exclude-rules:
     - path: _test\.go
       linters:
         - gomnd
@@ -88,6 +88,5 @@ formatters:
     - goimports
   settings:
     goimports:
-      local-prefixes: github.com/matiasinsaurralde/crowdllama
-    lll:
-      line-length: 140 
+      local-prefixes:
+        - github.com/matiasinsaurralde/crowdllama
