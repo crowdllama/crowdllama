@@ -68,19 +68,6 @@ linters:
         - octalLiteral
         - whyNoLint
         - wrapperFunc
-issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - gomnd
-        - goconst
-        - funlen
-        - gocyclo
-        - dupl
-        - thelper
-        - tparallel
-  max-issues-per-linter: 0
-  max-same-issues: 0
 formatters:
   enable:
     - gofmt
