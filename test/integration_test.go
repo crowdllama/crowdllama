@@ -390,6 +390,7 @@ func TestFullIntegration(t *testing.T) {
 		t.Fatalf("Invalid URL for testing: %s", url)
 	}
 
+	// #nosec G107
 	resp, err := http.Post(url, "application/json", bytes.NewBuffer(requestJSON))
 	if err != nil {
 		t.Fatalf("Failed to send HTTP request: %v", err)
@@ -503,6 +504,7 @@ func TestMockOllamaServer(t *testing.T) {
 		t.Fatalf("Invalid URL for testing: %s", url)
 	}
 
+	// #nosec G107
 	resp, err := http.Post(url, "application/json", bytes.NewBuffer(requestJSON))
 	if err != nil {
 		t.Fatalf("Failed to send HTTP request: %v", err)
