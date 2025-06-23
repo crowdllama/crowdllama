@@ -52,7 +52,7 @@ func requestWorkerMetadata(ctx context.Context, h host.Host, workerPeer peer.ID,
 func main() {
 	if err := runDHTServer(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return
 	}
 }
 

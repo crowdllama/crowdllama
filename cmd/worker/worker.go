@@ -23,7 +23,7 @@ func main() {
 		fmt.Println("Commands:")
 		fmt.Println("  version   Print the version information")
 		fmt.Println("  start     Start the application")
-		os.Exit(1)
+		return
 	}
 
 	switch os.Args[1] {
@@ -32,11 +32,11 @@ func main() {
 	case "start":
 		if err := runWorker(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
+			return
 		}
 	default:
 		fmt.Printf("Unknown command: %s\n", os.Args[1])
-		os.Exit(1)
+		return
 	}
 }
 
