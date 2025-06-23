@@ -78,6 +78,7 @@ func runWorker() error {
 		return fmt.Errorf("failed to start worker: %w", err)
 	}
 	logger.Info("Worker initialized", zap.String("peer_id", w.Host.ID().String()))
+	logger.Info("Worker addresses", zap.Any("addresses", w.Host.Addrs()))
 
 	setupWorkerMetadata(w)
 	w.AdvertiseModel(ctx, crowdllama.WorkerNamespace)
