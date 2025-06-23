@@ -5,7 +5,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -51,6 +50,13 @@ func requestWorkerMetadata(ctx context.Context, h host.Host, workerPeer peer.ID,
 }
 
 func main() {
+	if err := runDHTServer(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runDHTServer() error {
 	// Parse command line flags
 	startCmd := flag.NewFlagSet("start", flag.ExitOnError)
 
@@ -59,13 +65,12 @@ func main() {
 	cfg.ParseFlags(startCmd)
 
 	if err := startCmd.Parse(os.Args[1:]); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to parse args: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to parse args: %w", err)
 	}
 
 	// Setup logger
 	if err := cfg.SetupLogger(); err != nil {
-		log.Fatalf("Failed to setup logger: %v", err)
+		return fmt.Errorf("failed to setup logger: %w", err)
 	}
 	logger := cfg.GetLogger()
 	defer func() {
@@ -85,7 +90,7 @@ func main() {
 	if keyPath == "" {
 		defaultPath, err := keys.GetDefaultKeyPath("dht")
 		if err != nil {
-			logger.Fatal("Failed to get default key path", zap.Error(err))
+			return fmt.Errorf("failed to get default key path: %w", err)
 		}
 		keyPath = defaultPath
 	}
@@ -96,7 +101,7 @@ func main() {
 	// Get or create private key
 	privKey, err := keyManager.GetOrCreatePrivateKey()
 	if err != nil {
-		logger.Fatal("Failed to get or create private key", zap.Error(err))
+		return fmt.Errorf("failed to get or create private key: %w", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -104,8 +109,7 @@ func main() {
 
 	h, kadDHT, err := newDHTServer(ctx, privKey, logger)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to start DHT: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to start DHT: %w", err)
 	}
 	printHostInfo(h, logger)
 
@@ -130,11 +134,12 @@ func main() {
 
 	logger.Info("Bootstrapping DHT network")
 	if err := kadDHT.Bootstrap(ctx); err != nil {
-		logger.Fatal("Failed to bootstrap DHT", zap.Error(err))
+		return fmt.Errorf("failed to bootstrap DHT: %w", err)
 	}
 
 	logger.Info("DHT server running. Press Ctrl+C to exit.")
 	waitForShutdown(logger)
+	return nil
 }
 
 func newDHTServer(ctx context.Context, privKey crypto.PrivKey, logger *zap.Logger) (host.Host, *dht.IpfsDHT, error) {

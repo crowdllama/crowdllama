@@ -52,6 +52,106 @@ type Worker struct {
 	Metadata *crowdllama.Resource
 }
 
+// handleInferenceRequest processes an inference request from a consumer
+func handleInferenceRequest(ctx context.Context, s network.Stream) {
+	defer func() {
+		if err := s.Close(); err != nil {
+			log.Printf("failed to close stream: %v", err)
+		}
+	}()
+
+	fmt.Println("StreamHandler is called")
+
+	if err := s.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		log.Printf("failed to set read deadline: %v", err)
+	}
+
+	// Read the input data with a fixed buffer
+	buf := make([]byte, 1024)
+	n, err := s.Read(buf)
+	if err != nil {
+		log.Printf("Failed to read from stream: %v", err)
+		return
+	}
+
+	input := string(buf[:n])
+	log.Printf("Worker received inference request (%d bytes): %s", n, input)
+
+	// Prepare Ollama API request
+	ollamaReq := OllamaRequest{
+		Model: "tinyllama",
+		Messages: []Message{
+			{
+				Role:    "user",
+				Content: input,
+			},
+		},
+		Stream: false,
+	}
+
+	// Serialize request to JSON
+	reqBody, err := json.Marshal(ollamaReq)
+	if err != nil {
+		log.Printf("Failed to marshal Ollama request: %v", err)
+		return
+	}
+
+	// Make HTTP POST request to Ollama API
+	req, err := http.NewRequestWithContext(ctx, "POST", "http://localhost:11434/api/chat", bytes.NewBuffer(reqBody))
+	if err != nil {
+		log.Printf("Failed to create HTTP request: %v", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("Failed to make HTTP request to Ollama: %v", err)
+		return
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Printf("failed to close response body: %v", closeErr)
+		}
+	}()
+
+	// Read response body
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("Failed to read Ollama response: %v", err)
+		return
+	}
+
+	// Parse Ollama response
+	var ollamaResp OllamaResponse
+	if unmarshalErr := json.Unmarshal(respBody, &ollamaResp); unmarshalErr != nil {
+		log.Printf("Failed to unmarshal Ollama response: %v", unmarshalErr)
+		return
+	}
+
+	// Extract the response content
+	output := ollamaResp.Message.Content
+	if output == "" {
+		output = "No response content received from Ollama"
+	}
+
+	// Write the response
+	responseBytes := []byte(output)
+	log.Printf("Worker writing %d bytes: %s", len(responseBytes), output)
+	for i, b := range responseBytes {
+		log.Printf("Writing byte %d: '%s' (ASCII: %d)", i, string(b), b)
+	}
+
+	_, err = s.Write(responseBytes)
+	if err != nil {
+		log.Printf("Failed to write response: %v", err)
+		return
+	}
+
+	log.Printf("Worker sent response: %s", output)
+	fmt.Println("StreamHandler completed")
+}
+
 // NewWorker creates a new worker instance
 func NewWorker(ctx context.Context, privKey crypto.PrivKey) (*Worker, error) {
 	h, kadDHT, err := discovery.NewHostAndDHT(ctx, privKey)
@@ -64,102 +164,7 @@ func NewWorker(ctx context.Context, privKey crypto.PrivKey) (*Worker, error) {
 
 	fmt.Println("BootstrapDHT ok")
 	h.SetStreamHandler(consumer.InferenceProtocol, func(s network.Stream) {
-		defer func() {
-			if err := s.Close(); err != nil {
-				log.Printf("failed to close stream: %v", err)
-			}
-		}()
-
-		fmt.Println("StreamHandler is called")
-
-		if err := s.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
-			log.Printf("failed to set read deadline: %v", err)
-		}
-
-		// Read the input data with a fixed buffer
-		buf := make([]byte, 1024)
-		n, err := s.Read(buf)
-		if err != nil {
-			log.Printf("Failed to read from stream: %v", err)
-			return
-		}
-
-		input := string(buf[:n])
-		log.Printf("Worker received inference request (%d bytes): %s", n, input)
-
-		// Prepare Ollama API request
-		ollamaReq := OllamaRequest{
-			Model: "tinyllama",
-			Messages: []Message{
-				{
-					Role:    "user",
-					Content: input,
-				},
-			},
-			Stream: false,
-		}
-
-		// Serialize request to JSON
-		reqBody, err := json.Marshal(ollamaReq)
-		if err != nil {
-			log.Printf("Failed to marshal Ollama request: %v", err)
-			return
-		}
-
-		// Make HTTP POST request to Ollama API
-		req, err := http.NewRequestWithContext(ctx, "POST", "http://localhost:11434/api/chat", bytes.NewBuffer(reqBody))
-		if err != nil {
-			log.Printf("Failed to create HTTP request: %v", err)
-			return
-		}
-		req.Header.Set("Content-Type", "application/json")
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			log.Printf("Failed to make HTTP request to Ollama: %v", err)
-			return
-		}
-		defer func() {
-			if closeErr := resp.Body.Close(); closeErr != nil {
-				log.Printf("failed to close response body: %v", closeErr)
-			}
-		}()
-
-		// Read response body
-		respBody, err := io.ReadAll(resp.Body)
-		if err != nil {
-			log.Printf("Failed to read Ollama response: %v", err)
-			return
-		}
-
-		// Parse Ollama response
-		var ollamaResp OllamaResponse
-		if unmarshalErr := json.Unmarshal(respBody, &ollamaResp); unmarshalErr != nil {
-			log.Printf("Failed to unmarshal Ollama response: %v", unmarshalErr)
-			return
-		}
-
-		// Extract the response content
-		output := ollamaResp.Message.Content
-		if output == "" {
-			output = "No response content received from Ollama"
-		}
-
-		// Write the response
-		responseBytes := []byte(output)
-		log.Printf("Worker writing %d bytes: %s", len(responseBytes), output)
-		for i, b := range responseBytes {
-			log.Printf("Writing byte %d: '%s' (ASCII: %d)", i, string(b), b)
-		}
-
-		_, err = s.Write(responseBytes)
-		if err != nil {
-			log.Printf("Failed to write response: %v", err)
-			return
-		}
-
-		log.Printf("Worker sent response: %s", output)
-		fmt.Println("StreamHandler completed")
+		handleInferenceRequest(ctx, s)
 	})
 
 	// Initialize metadata

@@ -15,6 +15,7 @@ import (
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
 	"github.com/multiformats/go-multiaddr"
@@ -127,34 +128,8 @@ func GetWorkerNamespaceCID() (cid.Cid, error) {
 	return cid.NewCidV1(cid.Raw, mh), nil
 }
 
-// RequestWorkerMetadata retrieves metadata from a worker peer using the metadata protocol
-func RequestWorkerMetadata(ctx context.Context, h host.Host, workerPeer peer.ID, logger *zap.Logger) (*crowdllama.Resource, error) {
-	logger.Debug("Opening stream to worker for metadata request",
-		zap.String("worker_peer_id", workerPeer.String()),
-		zap.String("protocol", crowdllama.MetadataProtocol))
-
-	// Open a stream to the worker
-	stream, err := h.NewStream(ctx, workerPeer, crowdllama.MetadataProtocol)
-	if err != nil {
-		logger.Error("Failed to open stream to worker",
-			zap.String("worker_peer_id", workerPeer.String()),
-			zap.Error(err))
-		return nil, fmt.Errorf("failed to open stream to worker: %w", err)
-	}
-	defer func() {
-		if closeErr := stream.Close(); closeErr != nil {
-			logger.Warn("failed to close stream", zap.Error(closeErr))
-		}
-	}()
-
-	if setDeadlineErr := stream.SetReadDeadline(time.Now().Add(5 * time.Second)); setDeadlineErr != nil {
-		logger.Warn("failed to set read deadline", zap.Error(setDeadlineErr))
-	}
-
-	logger.Debug("Reading metadata response from worker",
-		zap.String("worker_peer_id", workerPeer.String()))
-
-	// Read the metadata response - read all available data until EOF
+// readMetadataStream reads all data from the stream until EOF
+func readMetadataStream(stream network.Stream, workerPeer peer.ID, logger *zap.Logger) ([]byte, error) {
 	var metadataJSON []byte
 	buf := make([]byte, 1024)
 	totalRead := 0
@@ -185,6 +160,42 @@ func RequestWorkerMetadata(ctx context.Context, h host.Host, workerPeer peer.ID,
 
 	if len(metadataJSON) == 0 {
 		return nil, fmt.Errorf("no metadata received from worker")
+	}
+
+	return metadataJSON, nil
+}
+
+// RequestWorkerMetadata retrieves metadata from a worker peer using the metadata protocol
+func RequestWorkerMetadata(ctx context.Context, h host.Host, workerPeer peer.ID, logger *zap.Logger) (*crowdllama.Resource, error) {
+	logger.Debug("Opening stream to worker for metadata request",
+		zap.String("worker_peer_id", workerPeer.String()),
+		zap.String("protocol", crowdllama.MetadataProtocol))
+
+	// Open a stream to the worker
+	stream, err := h.NewStream(ctx, workerPeer, crowdllama.MetadataProtocol)
+	if err != nil {
+		logger.Error("Failed to open stream to worker",
+			zap.String("worker_peer_id", workerPeer.String()),
+			zap.Error(err))
+		return nil, fmt.Errorf("failed to open stream to worker: %w", err)
+	}
+	defer func() {
+		if closeErr := stream.Close(); closeErr != nil {
+			logger.Warn("failed to close stream", zap.Error(closeErr))
+		}
+	}()
+
+	if setDeadlineErr := stream.SetReadDeadline(time.Now().Add(5 * time.Second)); setDeadlineErr != nil {
+		logger.Warn("failed to set read deadline", zap.Error(setDeadlineErr))
+	}
+
+	logger.Debug("Reading metadata response from worker",
+		zap.String("worker_peer_id", workerPeer.String()))
+
+	// Read the metadata response
+	metadataJSON, err := readMetadataStream(stream, workerPeer, logger)
+	if err != nil {
+		return nil, err
 	}
 
 	logger.Debug("Parsing metadata response",
