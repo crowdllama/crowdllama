@@ -390,8 +390,12 @@ func TestFullIntegration(t *testing.T) {
 		t.Fatalf("Invalid URL for testing: %s", url)
 	}
 
+	req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(requestJSON))
+	if reqErr != nil {
+		t.Fatalf("Failed to create HTTP request: %v", reqErr)
+	}
 	// #nosec G107
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(requestJSON))
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("Failed to send HTTP request: %v", err)
 	}
@@ -462,25 +466,36 @@ func TestMockOllamaServer(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	// Start mock server on a different port
+	mockOllama := setupMockOllamaServer(t)
+	defer shutdownMockOllamaServer(t, mockOllama)
+
+	// Give the server time to start
+	time.Sleep(1 * time.Second)
+
+	testMockOllamaRequest(t, mockOllama)
+}
+
+func setupMockOllamaServer(t *testing.T) *MockOllamaServer {
+	t.Helper()
 	mockOllama := NewMockOllamaServer(11435)
 	go func() {
 		if err := mockOllama.Start(); err != nil && err != http.ErrServerClosed {
 			t.Errorf("Mock Ollama server failed: %v", err)
 		}
 	}()
-	defer func() {
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer shutdownCancel()
-		if stopErr := mockOllama.Stop(shutdownCtx); stopErr != nil {
-			t.Logf("Failed to stop mock Ollama server: %v", stopErr)
-		}
-	}()
+	return mockOllama
+}
 
-	// Give the server time to start
-	time.Sleep(1 * time.Second)
+func shutdownMockOllamaServer(t *testing.T, mockOllama *MockOllamaServer) {
+	t.Helper()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if stopErr := mockOllama.Stop(shutdownCtx); stopErr != nil {
+		t.Logf("Failed to stop mock Ollama server: %v", stopErr)
+	}
+}
 
-	// Test the mock server
+func testMockOllamaRequest(t *testing.T, mockOllama *MockOllamaServer) {
 	requestBody := MockOllamaRequest{
 		Model: "tinyllama",
 		Messages: []Message{
@@ -504,8 +519,12 @@ func TestMockOllamaServer(t *testing.T) {
 		t.Fatalf("Invalid URL for testing: %s", url)
 	}
 
+	req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewBuffer(requestJSON))
+	if reqErr != nil {
+		t.Fatalf("Failed to create HTTP request: %v", reqErr)
+	}
 	// #nosec G107
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(requestJSON))
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("Failed to send HTTP request: %v", err)
 	}
@@ -524,6 +543,11 @@ func TestMockOllamaServer(t *testing.T) {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
 
+	validateMockOllamaResponse(t, &response)
+}
+
+func validateMockOllamaResponse(t *testing.T, response *MockOllamaResponse) {
+	t.Helper()
 	if response.Model != "tinyllama" {
 		t.Errorf("Expected model 'tinyllama', got '%s'", response.Model)
 	}

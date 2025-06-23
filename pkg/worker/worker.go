@@ -64,22 +64,44 @@ func handleInferenceRequest(ctx context.Context, s network.Stream, ollamaURL str
 
 	fmt.Println("StreamHandler is called")
 
-	if err := s.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		log.Printf("failed to set read deadline: %v", err)
+	input, err := readInferenceInput(s)
+	if err != nil {
+		log.Printf("Failed to read inference input: %v", err)
+		return
 	}
 
-	// Read the input data with a fixed buffer
+	output, err := callOllamaAPI(ctx, input, ollamaURL)
+	if err != nil {
+		log.Printf("Failed to call Ollama API: %v", err)
+		return
+	}
+
+	if err := writeInferenceResponse(s, output); err != nil {
+		log.Printf("Failed to write inference response: %v", err)
+		return
+	}
+
+	log.Printf("Worker sent response: %s", output)
+	fmt.Println("StreamHandler completed")
+}
+
+func readInferenceInput(s network.Stream) (string, error) {
+	if err := s.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return "", fmt.Errorf("failed to set read deadline: %w", err)
+	}
+
 	buf := make([]byte, 1024)
 	n, err := s.Read(buf)
 	if err != nil {
-		log.Printf("Failed to read from stream: %v", err)
-		return
+		return "", fmt.Errorf("failed to read from stream: %w", err)
 	}
 
 	input := string(buf[:n])
 	log.Printf("Worker received inference request (%d bytes): %s", n, input)
+	return input, nil
+}
 
-	// Prepare Ollama API request
+func callOllamaAPI(ctx context.Context, input, ollamaURL string) (string, error) {
 	ollamaReq := OllamaRequest{
 		Model: "tinyllama",
 		Messages: []Message{
@@ -91,30 +113,24 @@ func handleInferenceRequest(ctx context.Context, s network.Stream, ollamaURL str
 		Stream: false,
 	}
 
-	// Serialize request to JSON
 	reqBody, err := json.Marshal(ollamaReq)
 	if err != nil {
-		log.Printf("Failed to marshal Ollama request: %v", err)
-		return
+		return "", fmt.Errorf("failed to marshal Ollama request: %w", err)
 	}
 
-	// Use configurable Ollama URL, fallback to default if not set
 	if ollamaURL == "" {
 		ollamaURL = "http://localhost:11434/api/chat"
 	}
 
-	// Make HTTP POST request to Ollama API
 	req, err := http.NewRequestWithContext(ctx, "POST", ollamaURL, bytes.NewBuffer(reqBody))
 	if err != nil {
-		log.Printf("Failed to create HTTP request: %v", err)
-		return
+		return "", fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Printf("Failed to make HTTP request to Ollama: %v", err)
-		return
+		return "", fmt.Errorf("failed to make HTTP request to Ollama: %w", err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
@@ -122,41 +138,37 @@ func handleInferenceRequest(ctx context.Context, s network.Stream, ollamaURL str
 		}
 	}()
 
-	// Read response body
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Printf("Failed to read Ollama response: %v", err)
-		return
+		return "", fmt.Errorf("failed to read Ollama response: %w", err)
 	}
 
-	// Parse Ollama response
 	var ollamaResp OllamaResponse
-	if unmarshalErr := json.Unmarshal(respBody, &ollamaResp); unmarshalErr != nil {
-		log.Printf("Failed to unmarshal Ollama response: %v", unmarshalErr)
-		return
+	if err := json.Unmarshal(respBody, &ollamaResp); err != nil {
+		return "", fmt.Errorf("failed to unmarshal Ollama response: %w", err)
 	}
 
-	// Extract the response content
 	output := ollamaResp.Message.Content
 	if output == "" {
 		output = "No response content received from Ollama"
 	}
 
-	// Write the response
+	return output, nil
+}
+
+func writeInferenceResponse(s network.Stream, output string) error {
 	responseBytes := []byte(output)
 	log.Printf("Worker writing %d bytes: %s", len(responseBytes), output)
 	for i, b := range responseBytes {
 		log.Printf("Writing byte %d: '%s' (ASCII: %d)", i, string(b), b)
 	}
 
-	_, err = s.Write(responseBytes)
+	_, err := s.Write(responseBytes)
 	if err != nil {
-		log.Printf("Failed to write response: %v", err)
-		return
+		return fmt.Errorf("failed to write response: %w", err)
 	}
 
-	log.Printf("Worker sent response: %s", output)
-	fmt.Println("StreamHandler completed")
+	return nil
 }
 
 // NewWorker creates a new worker instance

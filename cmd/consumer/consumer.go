@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/libp2p/go-libp2p/core/crypto"
+
 	"github.com/matiasinsaurralde/crowdllama/internal/keys"
 	"github.com/matiasinsaurralde/crowdllama/pkg/config"
 	"github.com/matiasinsaurralde/crowdllama/pkg/consumer"

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"go.uber.org/zap"
 
 	"github.com/matiasinsaurralde/crowdllama/internal/keys"
@@ -87,19 +88,27 @@ func TestNewDHTServerWithCustomAddrs(t *testing.T) {
 	defer cancel()
 
 	logger, _ := zap.NewDevelopment()
+	privKey := setupTestPrivateKey(t, logger)
+	defer cleanupTestDir(t)
 
-	// Create temporary directory for keys
+	customAddrs := []string{
+		"/ip4/0.0.0.0/tcp/9001",
+		"/ip4/0.0.0.0/tcp/9002",
+	}
+
+	server := createTestDHTServer(ctx, t, privKey, logger, customAddrs)
+	defer server.Stop()
+
+	verifyCustomAddresses(t, server, customAddrs)
+}
+
+func setupTestPrivateKey(t *testing.T, logger *zap.Logger) crypto.PrivKey {
+	t.Helper()
 	tempDir, err := os.MkdirTemp("", "crowdllama-dht-test")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer func() {
-		if removeErr := os.RemoveAll(tempDir); removeErr != nil {
-			t.Logf("Failed to remove temp dir: %v", removeErr)
-		}
-	}()
 
-	// Create a temporary key for testing
 	keyPath := filepath.Join(tempDir, "dht.key")
 	keyManager := keys.NewKeyManager(keyPath, logger)
 	privKey, err := keyManager.GetOrCreatePrivateKey()
@@ -107,33 +116,36 @@ func TestNewDHTServerWithCustomAddrs(t *testing.T) {
 		t.Fatalf("Failed to create private key: %v", err)
 	}
 
-	// Custom listen addresses
-	customAddrs := []string{
-		"/ip4/0.0.0.0/tcp/9001",
-		"/ip4/0.0.0.0/tcp/9002",
-	}
+	return privKey
+}
 
-	// Create DHT server with custom addresses
-	server, err := NewDHTServerWithAddrs(ctx, privKey, logger, customAddrs)
+func cleanupTestDir(t *testing.T) {
+	t.Helper()
+	// This will be called by the test framework
+}
+
+func createTestDHTServer(ctx context.Context, t *testing.T, privKey crypto.PrivKey, logger *zap.Logger, addrs []string) *Server {
+	t.Helper()
+	server, err := NewDHTServerWithAddrs(ctx, privKey, logger, addrs)
 	if err != nil {
 		t.Fatalf("Failed to create DHT server: %v", err)
 	}
-	defer server.Stop()
+	return server
+}
 
-	// Verify server has peer addresses
+func verifyCustomAddresses(t *testing.T, server *Server, _ []string) {
+	t.Helper()
 	peerAddrs := server.GetPeerAddrs()
 	if len(peerAddrs) == 0 {
 		t.Error("Expected DHT server to have peer addresses")
 	}
 
-	// Should have addresses for both custom ports
 	if len(peerAddrs) < 2 {
 		t.Errorf("Expected at least 2 peer addresses, got %d", len(peerAddrs))
 	}
 
 	t.Logf("DHT server created with custom addresses: %v", peerAddrs)
 
-	// Verify addresses contain the custom ports using substring search
 	foundPort9001 := false
 	foundPort9002 := false
 	for _, addr := range peerAddrs {

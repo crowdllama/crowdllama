@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"go.uber.org/zap"
 
 	"github.com/matiasinsaurralde/crowdllama/internal/keys"
@@ -25,66 +26,42 @@ func main() {
 }
 
 func runDHTServer() error {
-	// Parse command line flags
 	startCmd := flag.NewFlagSet("start", flag.ExitOnError)
-
-	// Initialize configuration
-	cfg := config.NewConfiguration()
-	cfg.ParseFlags(startCmd)
-
-	if err := startCmd.Parse(os.Args[1:]); err != nil {
-		return fmt.Errorf("failed to parse args: %w", err)
+	cfg, err := parseDHTConfig(startCmd)
+	if err != nil {
+		return err
 	}
 
-	// Setup logger
-	if err := cfg.SetupLogger(); err != nil {
-		return fmt.Errorf("failed to setup logger: %w", err)
+	logger, err := setupDHTLogger(cfg)
+	if err != nil {
+		return err
 	}
-	logger := cfg.GetLogger()
 	defer func() {
-		if err := logger.Sync(); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to sync logger: %v\n", err)
+		if syncErr := logger.Sync(); syncErr != nil {
+			fmt.Fprintf(os.Stderr, "failed to sync logger: %v\n", syncErr)
 		}
 	}()
 
 	if cfg.IsVerbose() {
 		logger.Info("Verbose mode enabled")
 	}
-
 	logger.Info("Starting DHT server")
 
-	// Determine key path
-	keyPath := cfg.KeyPath
-	if keyPath == "" {
-		defaultPath, err := keys.GetDefaultKeyPath("dht")
-		if err != nil {
-			return fmt.Errorf("failed to get default key path: %w", err)
-		}
-		keyPath = defaultPath
-	}
-
-	// Initialize key manager
-	keyManager := keys.NewKeyManager(keyPath, logger)
-
-	// Get or create private key
-	privKey, err := keyManager.GetOrCreatePrivateKey()
+	privKey, err := getDHTPrivateKey(cfg, logger)
 	if err != nil {
-		return fmt.Errorf("failed to get or create private key: %w", err)
+		return err
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Create DHT server using the new package
 	server, err := dht.NewDHTServer(ctx, privKey, logger)
 	if err != nil {
 		return fmt.Errorf("failed to create DHT server: %w", err)
 	}
 
-	// Print host information
 	printHostInfo(server, logger)
 
-	// Start the DHT server
 	primaryAddr, err := server.Start()
 	if err != nil {
 		return fmt.Errorf("failed to start DHT server: %w", err)
@@ -95,6 +72,39 @@ func runDHTServer() error {
 
 	waitForShutdown(logger, server)
 	return nil
+}
+
+func parseDHTConfig(startCmd *flag.FlagSet) (*config.Configuration, error) {
+	cfg := config.NewConfiguration()
+	cfg.ParseFlags(startCmd)
+	if err := startCmd.Parse(os.Args[1:]); err != nil {
+		return nil, fmt.Errorf("failed to parse args: %w", err)
+	}
+	return cfg, nil
+}
+
+func setupDHTLogger(cfg *config.Configuration) (*zap.Logger, error) {
+	if err := cfg.SetupLogger(); err != nil {
+		return nil, fmt.Errorf("failed to setup logger: %w", err)
+	}
+	return cfg.GetLogger(), nil
+}
+
+func getDHTPrivateKey(cfg *config.Configuration, logger *zap.Logger) (crypto.PrivKey, error) {
+	keyPath := cfg.KeyPath
+	if keyPath == "" {
+		defaultPath, err := keys.GetDefaultKeyPath("dht")
+		if err != nil {
+			return nil, fmt.Errorf("failed to get default key path: %w", err)
+		}
+		keyPath = defaultPath
+	}
+	keyManager := keys.NewKeyManager(keyPath, logger)
+	privKey, err := keyManager.GetOrCreatePrivateKey()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get or create private key: %w", err)
+	}
+	return privKey, nil
 }
 
 func printHostInfo(server *dht.Server, logger *zap.Logger) {
