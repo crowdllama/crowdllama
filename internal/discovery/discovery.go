@@ -43,7 +43,7 @@ const (
 	// defaultBootstrapPeerAddr is the default bootstrap peer address for the DHT:
 	// TODO: allow CLI to pass custom peers
 	// defaultBootstrapPeerAddr = "/ip4/192.168.0.17/tcp/9000/p2p/12D3KooWJzvh2T7Htr1Dr86batqcAf4c5wB8D16zfkM2xJFpoahy"
-	defaultBootstrapPeerAddr = "/dns4/dht.crowdllama.ai/tcp/9000/p2p/12D3KooWFr9SERHgWsS2bKM7tU5mJ2USFq6tXD7jP16CxtspDvLf"
+	defaultBootstrapPeerAddr = "/dns4/dht.crowdllama.ai/tcp/9000/p2p/12D3KooWGDXKRromTN8jFpxzBqFKoxVzD3feaBpKBnj9YCLbakpw"
 	// hardcoded dns bootstrap dht:
 	// defaultBootstrapPeerAddr = "/dns4/dht.crowdllama.com/tcp/9000/p2p/12D3KooWJB3rAu12osvuqJDo2ncCN8VqQmVkecwgDxxu1AN7fmeR"
 )
