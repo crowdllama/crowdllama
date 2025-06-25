@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/ipfs/go-cid"
@@ -102,19 +103,49 @@ func NewDHTServerWithAddrs(ctx context.Context, privKey crypto.PrivKey, logger *
 
 // Start starts the DHT server and returns the primary peer address
 func (s *Server) Start() (string, error) {
-	// Set up network notifier to detect new connections
+	// Set up network notifier to detect new connections and NAT traversal
 	s.Host.Network().Notify(&network.NotifyBundle{
 		ConnectedF: func(_ network.Network, conn network.Conn) {
 			peerID := conn.RemotePeer().String()
-			s.logger.Info("New peer connected",
+			remoteAddr := conn.RemoteMultiaddr().String()
+			direction := conn.Stat().Direction.String()
+
+			// Log connection details
+			s.logger.Debug("New peer connected",
 				zap.String("peer_id", peerID),
-				zap.String("remote_addr", conn.RemoteMultiaddr().String()),
-				zap.String("direction", conn.Stat().Direction.String()))
+				zap.String("remote_addr", remoteAddr),
+				zap.String("direction", direction),
+				zap.String("transport", conn.RemoteMultiaddr().Protocols()[0].Name),
+				zap.Bool("is_relay", isRelayConnection(remoteAddr)),
+				zap.Bool("is_hole_punched", isHolePunchedConnection(remoteAddr, direction)))
+
+			// Log NAT traversal information
+			if isRelayConnection(remoteAddr) {
+				s.logger.Debug("Connection established via relay (NAT traversal)",
+					zap.String("peer_id", peerID),
+					zap.String("relay_addr", remoteAddr))
+			} else if isHolePunchedConnection(remoteAddr, direction) {
+				s.logger.Debug("Direct connection established (hole punching successful)",
+					zap.String("peer_id", peerID),
+					zap.String("direct_addr", remoteAddr))
+			} else {
+				s.logger.Debug("Direct connection established (no NAT)",
+					zap.String("peer_id", peerID),
+					zap.String("direct_addr", remoteAddr))
+			}
 		},
 		DisconnectedF: func(_ network.Network, conn network.Conn) {
 			s.logger.Info("Peer disconnected",
 				zap.String("peer_id", conn.RemotePeer().String()),
 				zap.String("remote_addr", conn.RemoteMultiaddr().String()))
+		},
+		ListenF: func(_ network.Network, addr multiaddr.Multiaddr) {
+			s.logger.Debug("Started listening on address",
+				zap.String("listen_addr", addr.String()))
+		},
+		ListenCloseF: func(_ network.Network, addr multiaddr.Multiaddr) {
+			s.logger.Debug("Stopped listening on address",
+				zap.String("listen_addr", addr.String()))
 		},
 	})
 
@@ -186,7 +217,54 @@ func (s *Server) GetConnectedPeersCount() int {
 	return len(s.Host.Network().Peers())
 }
 
+// GetNATStatus returns information about NAT traversal and connection types
+func (s *Server) GetNATStatus() map[string]interface{} {
+	connections := s.Host.Network().Conns()
+
+	stats := map[string]interface{}{
+		"total_connections":        len(connections),
+		"direct_connections":       0,
+		"relay_connections":        0,
+		"hole_punched_connections": 0,
+		"local_connections":        0,
+		"external_connections":     0,
+	}
+
+	for _, conn := range connections {
+		addr := conn.RemoteMultiaddr().String()
+		direction := conn.Stat().Direction.String()
+
+		if isRelayConnection(addr) {
+			stats["relay_connections"] = stats["relay_connections"].(int) + 1
+		} else if isHolePunchedConnection(addr, direction) {
+			stats["hole_punched_connections"] = stats["hole_punched_connections"].(int) + 1
+			stats["external_connections"] = stats["external_connections"].(int) + 1
+		} else if isExternalIP(addr) {
+			stats["direct_connections"] = stats["direct_connections"].(int) + 1
+			stats["external_connections"] = stats["external_connections"].(int) + 1
+		} else {
+			stats["local_connections"] = stats["local_connections"].(int) + 1
+		}
+	}
+
+	return stats
+}
+
+// LogNATStatus logs current NAT traversal statistics
+func (s *Server) LogNATStatus() {
+	stats := s.GetNATStatus()
+	s.logger.Debug("NAT traversal statistics",
+		zap.Int("total_connections", stats["total_connections"].(int)),
+		zap.Int("direct_connections", stats["direct_connections"].(int)),
+		zap.Int("relay_connections", stats["relay_connections"].(int)),
+		zap.Int("hole_punched_connections", stats["hole_punched_connections"].(int)),
+		zap.Int("local_connections", stats["local_connections"].(int)),
+		zap.Int("external_connections", stats["external_connections"].(int)))
+}
+
 // discoverWorkersPeriodically periodically discovers workers advertising the namespace
+//
+//nolint:funlen // This function handles multiple periodic tasks and is appropriately long
 func (s *Server) discoverWorkersPeriodically() {
 	// Use shorter interval for testing environments
 	discoveryInterval := 10 * time.Second
@@ -196,6 +274,14 @@ func (s *Server) discoverWorkersPeriodically() {
 
 	ticker := time.NewTicker(discoveryInterval) // Run every 2 seconds for testing
 	defer ticker.Stop()
+
+	// Log NAT status every 30 seconds (or 10 seconds in test mode)
+	natLogInterval := 30 * time.Second
+	if os.Getenv("CROW DLLAMA_TEST_MODE") == "1" {
+		natLogInterval = 10 * time.Second
+	}
+	natTicker := time.NewTicker(natLogInterval)
+	defer natTicker.Stop()
 
 	namespaceCID := s.getWorkerNamespaceCID()
 	s.logger.Info("Starting periodic worker discovery",
@@ -243,6 +329,9 @@ func (s *Server) discoverWorkersPeriodically() {
 					zap.String("namespace_cid", namespaceCID.String()),
 					zap.Int("total_workers_found", workerCount))
 			}
+		case <-natTicker.C:
+			// Log NAT traversal statistics periodically
+			s.LogNATStatus()
 		case <-s.ctx.Done():
 			return
 		}
@@ -274,4 +363,43 @@ func (s *Server) multiaddrsToStrings(addrs []multiaddr.Multiaddr) []string {
 		result[i] = addr.String()
 	}
 	return result
+}
+
+// isRelayConnection checks if a connection is going through a relay
+func isRelayConnection(addr string) bool {
+	return strings.Contains(addr, "/p2p-circuit/")
+}
+
+// isHolePunchedConnection checks if a connection is likely hole punched
+func isHolePunchedConnection(addr, direction string) bool {
+	// Hole punched connections are typically:
+	// 1. Inbound connections (other peer initiated)
+	// 2. Not relay connections
+	// 3. From external IP addresses (not localhost/private ranges)
+
+	if isRelayConnection(addr) {
+		return false
+	}
+
+	// Check if it's an inbound connection
+	if direction != "Inbound" {
+		return false
+	}
+
+	// Check if it's from an external IP (not localhost or private range)
+	return isExternalIP(addr)
+}
+
+// isExternalIP checks if an address is from an external IP
+func isExternalIP(addr string) bool {
+	// Extract IP from multiaddr
+	if strings.Contains(addr, "/ip4/127.0.0.1/") ||
+		strings.Contains(addr, "/ip4/192.168.") ||
+		strings.Contains(addr, "/ip4/10.") ||
+		strings.Contains(addr, "/ip4/172.") ||
+		strings.Contains(addr, "/ip6/::1/") ||
+		strings.Contains(addr, "/ip6/fe80:") {
+		return false
+	}
+	return true
 }
