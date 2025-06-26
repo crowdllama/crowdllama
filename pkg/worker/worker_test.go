@@ -2,6 +2,7 @@ package worker
 
 import (
 	"testing"
+	"time"
 
 	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
 )
@@ -12,81 +13,73 @@ func TestUpdateMetadata(t *testing.T) {
 		Metadata: crowdllama.NewCrowdLlamaResource("test-peer"),
 	}
 
-	models := []string{"model1", "model2", "model3"}
-	tokensThroughput := 150.5
-	vramGB := 16
-	load := 0.75
-	gpuModel := "RTX 4090"
+	// Store initial timestamp
+	initialTime := worker.Metadata.LastUpdated
 
-	worker.UpdateMetadata(models, tokensThroughput, vramGB, load, gpuModel)
+	// Wait a bit to ensure timestamp difference
+	time.Sleep(10 * time.Millisecond)
 
-	// Verify metadata was updated
-	if len(worker.Metadata.SupportedModels) != len(models) {
-		t.Errorf("Expected %d models, got %d", len(models), len(worker.Metadata.SupportedModels))
+	// Call the new UpdateMetadata method
+	err := worker.UpdateMetadata()
+	if err != nil {
+		t.Fatalf("UpdateMetadata failed: %v", err)
 	}
 
-	for i, model := range models {
+	// Verify metadata was updated with hardcoded values
+	expectedModels := []string{"llama-2-7b", "llama-2-13b", "mistral-7b", "tinyllama"}
+	if len(worker.Metadata.SupportedModels) != len(expectedModels) {
+		t.Errorf("Expected %d models, got %d", len(expectedModels), len(worker.Metadata.SupportedModels))
+	}
+
+	for i, model := range expectedModels {
 		if worker.Metadata.SupportedModels[i] != model {
 			t.Errorf("Expected model %s at index %d, got %s", model, i, worker.Metadata.SupportedModels[i])
 		}
 	}
 
-	if worker.Metadata.TokensThroughput != tokensThroughput {
-		t.Errorf("Expected TokensThroughput %f, got %f", tokensThroughput, worker.Metadata.TokensThroughput)
+	expectedThroughput := 150.0
+	if worker.Metadata.TokensThroughput != expectedThroughput {
+		t.Errorf("Expected TokensThroughput %f, got %f", expectedThroughput, worker.Metadata.TokensThroughput)
 	}
 
-	if worker.Metadata.VRAMGB != vramGB {
-		t.Errorf("Expected VRAMGB %d, got %d", vramGB, worker.Metadata.VRAMGB)
+	expectedVRAM := 24
+	if worker.Metadata.VRAMGB != expectedVRAM {
+		t.Errorf("Expected VRAMGB %d, got %d", expectedVRAM, worker.Metadata.VRAMGB)
 	}
 
-	if worker.Metadata.Load != load {
-		t.Errorf("Expected Load %f, got %f", load, worker.Metadata.Load)
+	expectedLoad := 0.3
+	if worker.Metadata.Load != expectedLoad {
+		t.Errorf("Expected Load %f, got %f", expectedLoad, worker.Metadata.Load)
 	}
 
-	if worker.Metadata.GPUModel != gpuModel {
-		t.Errorf("Expected GPUModel %s, got %s", gpuModel, worker.Metadata.GPUModel)
+	expectedGPU := "RTX 4090"
+	if worker.Metadata.GPUModel != expectedGPU {
+		t.Errorf("Expected GPUModel %s, got %s", expectedGPU, worker.Metadata.GPUModel)
 	}
 
-	// Verify LastUpdated was set
+	// Verify LastUpdated was updated
+	if worker.Metadata.LastUpdated.Equal(initialTime) {
+		t.Error("Expected LastUpdated to be updated, got same time")
+	}
+
 	if worker.Metadata.LastUpdated.IsZero() {
 		t.Error("Expected LastUpdated to be set, got zero time")
 	}
 }
 
-func TestUpdateMetadataEmptyModels(t *testing.T) {
-	worker := &Worker{
-		Metadata: crowdllama.NewCrowdLlamaResource("test-peer"),
+func TestUpdateMetadataInterval(t *testing.T) {
+	// Test that the metadata update interval can be set and retrieved
+	originalInterval := GetMetadataUpdateInterval()
+
+	// Set a new interval
+	newInterval := 60 * time.Second
+	SetMetadataUpdateInterval(newInterval)
+
+	// Verify it was set correctly
+	if GetMetadataUpdateInterval() != newInterval {
+		t.Errorf("Expected interval %v, got %v", newInterval, GetMetadataUpdateInterval())
 	}
 
-	// Test with empty models slice
-	worker.UpdateMetadata([]string{}, 100.0, 8, 0.5, "GTX 1080")
-
-	if len(worker.Metadata.SupportedModels) != 0 {
-		t.Errorf("Expected 0 models, got %d", len(worker.Metadata.SupportedModels))
-	}
-}
-
-func TestUpdateMetadataZeroValues(t *testing.T) {
-	worker := &Worker{
-		Metadata: crowdllama.NewCrowdLlamaResource("test-peer"),
-	}
-
-	// Test with zero values
-	worker.UpdateMetadata([]string{"test"}, 0.0, 0, 0.0, "")
-
-	if worker.Metadata.TokensThroughput != 0.0 {
-		t.Errorf("Expected TokensThroughput 0.0, got %f", worker.Metadata.TokensThroughput)
-	}
-
-	if worker.Metadata.VRAMGB != 0 {
-		t.Errorf("Expected VRAMGB 0, got %d", worker.Metadata.VRAMGB)
-	}
-
-	if worker.Metadata.Load != 0.0 {
-		t.Errorf("Expected Load 0.0, got %f", worker.Metadata.Load)
-	}
-
-	if worker.Metadata.GPUModel != "" {
-		t.Errorf("Expected GPUModel empty string, got %s", worker.Metadata.GPUModel)
-	}
+	// Restore original interval
+	SetMetadataUpdateInterval(originalInterval)
 }
