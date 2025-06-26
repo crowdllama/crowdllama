@@ -177,9 +177,6 @@ func callOllamaAPI(ctx context.Context, input, ollamaURL string) (string, error)
 func writeInferenceResponse(s network.Stream, output string) error {
 	responseBytes := []byte(output)
 	log.Printf("Worker writing %d bytes: %s", len(responseBytes), output)
-	for i, b := range responseBytes {
-		log.Printf("Writing byte %d: '%s' (ASCII: %d)", i, string(b), b)
-	}
 
 	_, err := s.Write(responseBytes)
 	if err != nil {
