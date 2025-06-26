@@ -3,14 +3,13 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
-	"github.com/libp2p/go-libp2p/core/crypto"
 	"go.uber.org/zap"
 
 	"github.com/matiasinsaurralde/crowdllama/pkg/ui"
@@ -41,25 +40,15 @@ func main() {
 		}
 	}()
 
-	// Generate a random private key for this UI instance
-	privKey, _, err := crypto.GenerateKeyPairWithReader(crypto.Ed25519, 2048, rand.Reader)
-	if err != nil {
-		logger.Fatal("Failed to generate private key", zap.Error(err))
-	}
-
 	// Create context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Create UI server
-	uiServer, err := ui.NewUIServer(ctx, logger, privKey)
+	uiServer, err := ui.NewUIServer(ctx, logger)
 	if err != nil {
 		logger.Fatal("Failed to create UI server", zap.Error(err))
 	}
-
-	// Start background worker discovery
-	uiServer.StartBackgroundDiscovery()
-	defer uiServer.StopBackgroundDiscovery()
 
 	// Start HTTP server in a goroutine
 	go func() {
@@ -76,7 +65,7 @@ func main() {
 	logger.Info("Shutting down UI server...")
 
 	// Graceful shutdown
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
 	if err := uiServer.StopHTTPServer(shutdownCtx); err != nil {
