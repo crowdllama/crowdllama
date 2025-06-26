@@ -171,13 +171,9 @@ func stepInitWorker(ctx context.Context, t *testing.T, workerPrivKey crypto.Priv
 func stepSetupWorkerMetadata(t *testing.T, worker *Worker) {
 	t.Helper()
 	worker.SetupMetadataHandler()
-	worker.UpdateMetadata(
-		[]string{"tinyllama", "llama2"},
-		100.0, // tokens per second
-		8,     // VRAM GB
-		0.5,   // load
-		"RTX 3080",
-	)
+	if err := worker.UpdateMetadata(); err != nil {
+		t.Fatalf("UpdateMetadata failed: %v", err)
+	}
 }
 
 func stepAdvertiseWorker(ctx context.Context, t *testing.T, worker *Worker) {
