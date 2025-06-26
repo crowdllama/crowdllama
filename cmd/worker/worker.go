@@ -126,13 +126,8 @@ func getWorkerPrivateKey(cfg *config.Configuration, logger *zap.Logger) (crypto.
 
 func setupWorkerMetadata(w *worker.Worker) {
 	w.SetupMetadataHandler()
-	w.UpdateMetadata(
-		[]string{"llama-2-7b", "llama-2-13b", "mistral-7b", "tinyllama"},
-		150.0, // tokens/sec
-		24,    // VRAM GB
-		0.3,   // current load
-		"RTX 4090",
-	)
+	// Start the periodic metadata updates
+	w.StartMetadataUpdates()
 }
 
 func startMetadataPublisher(ctx context.Context, w *worker.Worker, logger *zap.Logger) {

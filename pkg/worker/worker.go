@@ -24,6 +24,19 @@ import (
 	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
 )
 
+// MetadataUpdateInterval is the interval at which worker metadata is updated
+var MetadataUpdateInterval = 30 * time.Second
+
+// SetMetadataUpdateInterval allows programmatically setting the metadata update interval
+func SetMetadataUpdateInterval(interval time.Duration) {
+	MetadataUpdateInterval = interval
+}
+
+// GetMetadataUpdateInterval returns the current metadata update interval
+func GetMetadataUpdateInterval() time.Duration {
+	return MetadataUpdateInterval
+}
+
 // OllamaRequest represents the request structure for Ollama API
 type OllamaRequest struct {
 	Model    string    `json:"model"`
@@ -53,6 +66,10 @@ type Worker struct {
 	DHT       *dht.IpfsDHT
 	Metadata  *crowdllama.Resource
 	OllamaURL string // Configurable Ollama URL for testing
+
+	// Metadata update management
+	metadataCtx    context.Context
+	metadataCancel context.CancelFunc
 }
 
 // handleInferenceRequest processes an inference request from a consumer
@@ -213,11 +230,16 @@ func NewWorkerWithBootstrapPeersAndOllamaURL(
 	// Initialize metadata
 	metadata := crowdllama.NewCrowdLlamaResource(h.ID().String())
 
+	// Create metadata context for managing metadata updates
+	metadataCtx, metadataCancel := context.WithCancel(ctx)
+
 	return &Worker{
-		Host:      h,
-		DHT:       kadDHT,
-		Metadata:  metadata,
-		OllamaURL: ollamaURL,
+		Host:           h,
+		DHT:            kadDHT,
+		Metadata:       metadata,
+		OllamaURL:      ollamaURL,
+		metadataCtx:    metadataCtx,
+		metadataCancel: metadataCancel,
 	}, nil
 }
 
@@ -256,14 +278,68 @@ func (w *Worker) SetupMetadataHandler() {
 	log.Printf("Metadata handler setup complete")
 }
 
-// UpdateMetadata updates the worker's metadata
-func (w *Worker) UpdateMetadata(models []string, tokensThroughput float64, vramGB int, load float64, gpuModel string) {
+// UpdateMetadata queries Ollama API and updates the worker's internal metadata
+func (w *Worker) UpdateMetadata() error {
+	// For now, use hardcoded values as requested
+	// TODO: In the future, this could query Ollama API for actual model information
+
+	// Hardcoded metadata values
+	models := []string{"llama-2-7b", "llama-2-13b", "mistral-7b", "tinyllama"}
+	tokensThroughput := 150.0 // tokens/sec
+	vramGB := 24              // VRAM GB
+	load := 0.3               // current load (0.0 to 1.0)
+	gpuModel := "RTX 4090"
+
+	// Update the metadata
 	w.Metadata.SupportedModels = models
 	w.Metadata.TokensThroughput = tokensThroughput
 	w.Metadata.VRAMGB = vramGB
 	w.Metadata.Load = load
 	w.Metadata.GPUModel = gpuModel
 	w.Metadata.LastUpdated = time.Now()
+
+	log.Printf("Updated worker metadata - Models: %v, Throughput: %.1f tokens/sec, VRAM: %dGB, Load: %.1f, GPU: %s",
+		models, tokensThroughput, vramGB, load, gpuModel)
+
+	return nil
+}
+
+// StartMetadataUpdates starts periodic metadata updates
+func (w *Worker) StartMetadataUpdates() {
+	go func() {
+		// Use shorter interval for testing environments
+		updateInterval := MetadataUpdateInterval
+		if os.Getenv("CROW DLLAMA_TEST_MODE") == "1" {
+			updateInterval = 5 * time.Second
+		}
+
+		ticker := time.NewTicker(updateInterval)
+		defer ticker.Stop()
+
+		// Run initial update immediately
+		if err := w.UpdateMetadata(); err != nil {
+			log.Printf("Failed to perform initial metadata update: %v", err)
+		}
+
+		for {
+			select {
+			case <-ticker.C:
+				if err := w.UpdateMetadata(); err != nil {
+					log.Printf("Failed to update metadata: %v", err)
+				}
+			case <-w.metadataCtx.Done():
+				log.Printf("Metadata update loop stopped")
+				return
+			}
+		}
+	}()
+}
+
+// StopMetadataUpdates stops the periodic metadata updates
+func (w *Worker) StopMetadataUpdates() {
+	if w.metadataCancel != nil {
+		w.metadataCancel()
+	}
 }
 
 // PublishMetadata publishes the worker's metadata to the DHT
