@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
-	"math/rand"
 	"net/http"
 	"sync"
 	"time"
@@ -49,6 +48,17 @@ type MetricsEvent struct {
 	Data      interface{} `json:"data"`
 }
 
+// PeerInfo represents information about a peer (worker or consumer)
+type PeerInfo struct {
+	ID              string    `json:"id"`
+	Type            string    `json:"type"` // "worker" or "consumer"
+	SupportedModels []string  `json:"supported_models,omitempty"`
+	FirstSeen       time.Time `json:"first_seen"`
+	LastSeen        time.Time `json:"last_seen"`
+	X               int       `json:"x"`
+	Y               int       `json:"y"`
+}
+
 // Server handles the web UI and manages DHT connection and worker discovery
 type Server struct {
 	server *http.Server
@@ -63,6 +73,10 @@ type Server struct {
 	workersMutex    sync.RWMutex
 	discoveryCtx    context.Context
 	discoveryCancel context.CancelFunc
+
+	// Peer management (all peers: workers and consumers)
+	allPeers      map[string]*PeerInfo
+	allPeersMutex sync.RWMutex
 
 	// Metrics management
 	inferenceTasks []*InferenceTask
@@ -123,6 +137,32 @@ func NewUIServer(ctx context.Context, logger *zap.Logger) (*Server, error) {
 		workers:         make([]*crowdllama.Resource, 0),
 		inferenceTasks:  make([]*InferenceTask, 0),
 		sseClients:      make(map[chan MetricsEvent]bool),
+		allPeers:        make(map[string]*PeerInfo),
+	}
+
+	// Add the UI server itself as a consumer peer
+	uiServerPeerID := h.ID().String()
+	now := time.Now()
+
+	// Generate random position using crypto/rand
+	xBytes := make([]byte, 4)
+	yBytes := make([]byte, 4)
+	if _, err := cryptorand.Read(xBytes); err != nil {
+		return nil, fmt.Errorf("generate random x position: %w", err)
+	}
+	if _, err := cryptorand.Read(yBytes); err != nil {
+		return nil, fmt.Errorf("generate random y position: %w", err)
+	}
+	x := int(xBytes[0])%700 + 100
+	y := int(yBytes[0])%500 + 100
+
+	server.allPeers[uiServerPeerID] = &PeerInfo{
+		ID:        uiServerPeerID,
+		Type:      "consumer",
+		FirstSeen: now,
+		LastSeen:  now,
+		X:         x,
+		Y:         y,
 	}
 
 	// Start background worker discovery
@@ -192,27 +232,76 @@ func (u *Server) discoverWorkers() {
 
 	u.logger.Info("Discovered workers", zap.Int("count", len(workers)))
 
-	// Check for new workers and broadcast them
+	// Check for new workers and add them to allPeers
 	oldWorkerIDs := make(map[string]bool)
 	for _, worker := range oldWorkers {
 		oldWorkerIDs[worker.PeerID] = true
 	}
 
+	now := time.Now()
 	for _, worker := range workers {
 		if !oldWorkerIDs[worker.PeerID] {
 			u.logger.Debug("New worker found",
 				zap.String("peer_id", worker.PeerID),
 				zap.Strings("supported_models", worker.SupportedModels))
 
+			// Add to allPeers
+			u.allPeersMutex.Lock()
+
+			// Generate random position using crypto/rand
+			xBytes := make([]byte, 4)
+			yBytes := make([]byte, 4)
+			if _, err := cryptorand.Read(xBytes); err != nil {
+				u.logger.Error("Failed to generate random x position", zap.Error(err))
+				continue
+			}
+			if _, err := cryptorand.Read(yBytes); err != nil {
+				u.logger.Error("Failed to generate random y position", zap.Error(err))
+				continue
+			}
+			x := int(xBytes[0])%700 + 100
+			y := int(yBytes[0])%500 + 100
+
+			u.allPeers[worker.PeerID] = &PeerInfo{
+				ID:              worker.PeerID,
+				Type:            "worker",
+				SupportedModels: worker.SupportedModels,
+				FirstSeen:       now,
+				LastSeen:        now,
+				X:               x,
+				Y:               y,
+			}
+			u.allPeersMutex.Unlock()
+
 			// Broadcast new peer event
 			u.broadcastEvent("peer_joined", map[string]interface{}{
 				"peer_id": worker.PeerID,
+				"type":    "worker",
 				"models":  worker.SupportedModels,
-				"x":       rand.Intn(700) + 100, // Random position
-				"y":       rand.Intn(500) + 100,
+				"x":       u.allPeers[worker.PeerID].X,
+				"y":       u.allPeers[worker.PeerID].Y,
 			})
+		} else {
+			// Update last seen time for existing workers
+			u.allPeersMutex.Lock()
+			if peerInfo, exists := u.allPeers[worker.PeerID]; exists {
+				peerInfo.LastSeen = now
+			}
+			u.allPeersMutex.Unlock()
 		}
 	}
+}
+
+// getAllPeers returns all known peers (workers and consumers)
+func (u *Server) getAllPeers() []*PeerInfo {
+	u.allPeersMutex.RLock()
+	defer u.allPeersMutex.RUnlock()
+
+	peers := make([]*PeerInfo, 0, len(u.allPeers))
+	for _, peer := range u.allPeers {
+		peers = append(peers, peer)
+	}
+	return peers
 }
 
 // getRandomWorker returns a random worker from the discovered workers
@@ -314,7 +403,7 @@ func (u *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleMetrics serves the metrics visualization page
-func (u *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+func (u *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	tmpl := template.Must(template.New("metrics").Parse(metricsHTML))
 	if err := tmpl.Execute(w, nil); err != nil {
 		u.logger.Error("Failed to execute metrics template", zap.Error(err))
@@ -370,29 +459,33 @@ func (u *Server) handleMetricsEvents(w http.ResponseWriter, r *http.Request) {
 	u.sseClientsMutex.Unlock()
 
 	// Send initial state
-	u.workersMutex.RLock()
-	workers := make([]map[string]interface{}, len(u.workers))
-	for i, worker := range u.workers {
-		workers[i] = map[string]interface{}{
-			"peer_id": worker.PeerID,
-			"models":  worker.SupportedModels,
-			"x":       rand.Intn(700) + 100,
-			"y":       rand.Intn(500) + 100,
-		}
+	u.allPeersMutex.RLock()
+	peers := make([]map[string]interface{}, 0, len(u.allPeers))
+	for _, peer := range u.allPeers {
+		peers = append(peers, map[string]interface{}{
+			"id":               peer.ID,
+			"type":             peer.Type,
+			"supported_models": peer.SupportedModels,
+			"x":                peer.X,
+			"y":                peer.Y,
+		})
 	}
-	u.workersMutex.RUnlock()
+	u.allPeersMutex.RUnlock()
 
 	initialEvent := MetricsEvent{
 		Type:      "initial_state",
 		Timestamp: time.Now(),
 		Data: map[string]interface{}{
-			"workers": workers,
+			"peers": peers,
 		},
 	}
 
 	// Send initial state
 	eventData, _ := json.Marshal(initialEvent)
-	fmt.Fprintf(w, "data: %s\n\n", eventData)
+	if _, err := fmt.Fprintf(w, "data: %s\n\n", eventData); err != nil {
+		u.logger.Error("Failed to write initial state", zap.Error(err))
+		return
+	}
 	w.(http.Flusher).Flush()
 
 	// Listen for events
@@ -404,7 +497,10 @@ func (u *Server) handleMetricsEvents(w http.ResponseWriter, r *http.Request) {
 				u.logger.Error("Failed to marshal event", zap.Error(err))
 				continue
 			}
-			fmt.Fprintf(w, "data: %s\n\n", eventData)
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", eventData); err != nil {
+				u.logger.Error("Failed to write event", zap.Error(err))
+				return
+			}
 			w.(http.Flusher).Flush()
 		case <-r.Context().Done():
 			// Client disconnected
@@ -439,29 +535,21 @@ func (u *Server) handleMetricsInferences(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-// handleWorkers returns the list of available workers
+// handleWorkers returns the list of all peers (workers and consumers)
 func (u *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	u.workersMutex.RLock()
-	workers := make([]map[string]interface{}, len(u.workers))
-	for i, worker := range u.workers {
-		workers[i] = map[string]interface{}{
-			"peer_id":          worker.PeerID,
-			"supported_models": worker.SupportedModels,
-		}
-	}
-	u.workersMutex.RUnlock()
+	peers := u.getAllPeers()
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]interface{}{
-		"workers": workers,
-		"count":   len(workers),
+		"peers": peers,
+		"count": len(peers),
 	}); err != nil {
-		u.logger.Error("Failed to encode workers response", zap.Error(err))
+		u.logger.Error("Failed to encode peers response", zap.Error(err))
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
@@ -572,13 +660,13 @@ func (u *Server) sendInferenceRequest(model, prompt string) (response string, wo
 
 	// Send the request as a simple string (model + prompt)
 	requestStr := fmt.Sprintf("Model: %s\nPrompt: %s", model, prompt)
-	if _, err := stream.Write([]byte(requestStr)); err != nil {
-		return "", "", 0, fmt.Errorf("write inference request: %w", err)
+	if _, writeErr := stream.Write([]byte(requestStr)); writeErr != nil {
+		return "", "", 0, fmt.Errorf("write inference request: %w", writeErr)
 	}
 
 	// Close write side to signal end of request
-	if err := stream.CloseWrite(); err != nil {
-		return "", "", 0, fmt.Errorf("close write stream: %w", err)
+	if closeErr := stream.CloseWrite(); closeErr != nil {
+		return "", "", 0, fmt.Errorf("close write stream: %w", closeErr)
 	}
 
 	// Read the response
@@ -1020,33 +1108,34 @@ const metricsHTML = `<!DOCTYPE html>
         /* Inference connection */
         .inference-connection {
             position: absolute;
-            height: 2px;
+            height: 3px;
             background: repeating-linear-gradient(
                 90deg,
                 #0070f3 0px,
-                #0070f3 8px,
-                transparent 8px,
-                transparent 16px
+                #0070f3 10px,
+                transparent 10px,
+                transparent 20px
             );
             z-index: 4;
-            animation: dataTransfer 1s linear infinite;
-            box-shadow: 0 0 10px rgba(0, 112, 243, 0.5);
+            animation: dataTransfer 0.8s linear infinite;
+            box-shadow: 0 0 15px rgba(0, 112, 243, 0.8);
+            border-radius: 2px;
         }
         
         @keyframes dataTransfer {
             0% { 
                 background-position: 0 0;
-                opacity: 0.7;
-                box-shadow: 0 0 10px rgba(0, 112, 243, 0.5);
+                opacity: 0.8;
+                box-shadow: 0 0 15px rgba(0, 112, 243, 0.8);
             }
             50% { 
                 opacity: 1;
-                box-shadow: 0 0 20px rgba(0, 112, 243, 0.8);
+                box-shadow: 0 0 25px rgba(0, 112, 243, 1);
             }
             100% { 
-                background-position: -16px 0;
-                opacity: 0.7;
-                box-shadow: 0 0 10px rgba(0, 112, 243, 0.5);
+                background-position: -20px 0;
+                opacity: 0.8;
+                box-shadow: 0 0 15px rgba(0, 112, 243, 0.8);
             }
         }
         
@@ -1368,14 +1457,15 @@ const metricsHTML = `<!DOCTYPE html>
                 this.peers.forEach(peer => peer.element.remove());
                 this.peers = [];
                 
-                // Add workers from initial state
-                if (data.workers) {
-                    data.workers.forEach(worker => {
+                // Add all peers from initial state
+                if (data.peers) {
+                    data.peers.forEach(peer => {
                         this.addPeer({
-                            id: worker.peer_id,
-                            models: worker.models,
-                            x: worker.x,
-                            y: worker.y
+                            id: peer.id,
+                            type: peer.type,
+                            models: peer.supported_models || [],
+                            x: peer.x,
+                            y: peer.y
                         });
                     });
                 }
@@ -1386,7 +1476,8 @@ const metricsHTML = `<!DOCTYPE html>
             handlePeerJoined(data) {
                 this.addPeer({
                     id: data.peer_id,
-                    models: data.models,
+                    type: data.type || 'worker',
+                    models: data.models || [],
                     x: data.x,
                     y: data.y
                 });
@@ -1401,6 +1492,17 @@ const metricsHTML = `<!DOCTYPE html>
                 peer.className = 'peer peer-join';
                 peer.style.left = peerData.x + 'px';
                 peer.style.top = peerData.y + 'px';
+                
+                // Add peer type indicator
+                if (peerData.type === 'worker') {
+                    peer.style.background = '#00ff88';
+                    peer.style.boxShadow = '0 2px 8px rgba(0, 255, 136, 0.3)';
+                    peer.title = 'Worker - ' + peerData.id.substring(0, 12) + '...';
+                } else if (peerData.type === 'consumer') {
+                    peer.style.background = '#0070f3';
+                    peer.style.boxShadow = '0 2px 8px rgba(0, 112, 243, 0.3)';
+                    peer.title = 'Consumer - ' + peerData.id.substring(0, 12) + '...';
+                }
                 
                 peer.addEventListener('click', () => this.selectPeer(peerData));
                 
@@ -1429,26 +1531,32 @@ const metricsHTML = `<!DOCTYPE html>
                 }
                 
                 // Update info panel with latest data
-                this.updatePeerInfo(peerData.id);
+                this.updatePeerInfo(peerData.id, peerData.type);
             }
             
-            async updatePeerInfo(peerId) {
+            async updatePeerInfo(peerId, peerType) {
                 try {
-                    const response = await fetch('/api/worker_info?peer_id=' + peerId);
-                    if (response.ok) {
-                        const workerData = await response.json();
-                        
-                        this.peerIdElement.textContent = workerData.peer_id;
-                        this.modelsListElement.innerHTML = '';
-                        
-                        workerData.supported_models.forEach(model => {
-                            const li = document.createElement('li');
-                            li.textContent = model;
-                            this.modelsListElement.appendChild(li);
-                        });
+                    if (peerType === 'worker') {
+                        const response = await fetch('/api/worker_info?peer_id=' + peerId);
+                        if (response.ok) {
+                            const workerData = await response.json();
+                            
+                            this.peerIdElement.textContent = 'Worker: ' + workerData.peer_id;
+                            this.modelsListElement.innerHTML = '';
+                            
+                            workerData.supported_models.forEach(model => {
+                                const li = document.createElement('li');
+                                li.textContent = model;
+                                this.modelsListElement.appendChild(li);
+                            });
+                        }
+                    } else {
+                        // For consumers, show basic info
+                        this.peerIdElement.textContent = 'Consumer: ' + peerId;
+                        this.modelsListElement.innerHTML = '<li>No models (consumer peer)</li>';
                     }
                 } catch (error) {
-                    console.error('Failed to fetch worker info:', error);
+                    console.error('Failed to fetch peer info:', error);
                 }
             }
             
@@ -1508,7 +1616,7 @@ const metricsHTML = `<!DOCTYPE html>
             }
             
             createInferenceConnection(taskData) {
-                // Find the consumer and worker peers
+                // Find the consumer and worker peers by full peer ID
                 const consumerPeer = this.peers.find(p => p.data.id === taskData.consumerPeerId.replace('...', ''));
                 const workerPeer = this.peers.find(p => p.data.id === taskData.workerPeerId.replace('...', ''));
                 
@@ -1521,6 +1629,7 @@ const metricsHTML = `<!DOCTYPE html>
                     const workerX = workerRect.left + workerRect.width / 2;
                     const workerY = workerRect.top + workerRect.height / 2;
                     
+                    // Create animated data transfer connection
                     const connection = document.createElement('div');
                     connection.className = 'inference-connection';
                     
@@ -1536,20 +1645,17 @@ const metricsHTML = `<!DOCTYPE html>
                     
                     this.container.appendChild(connection);
                     
-                    // Remove the connection after 5 seconds
+                    // Highlight the connected peers temporarily
+                    consumerPeer.element.style.transform = 'scale(1.8)';
+                    workerPeer.element.style.transform = 'scale(1.8)';
+                    
+                    // Remove the connection and reset peer highlighting after 5 seconds
                     setTimeout(() => {
                         if (connection.parentNode) {
                             connection.parentNode.removeChild(connection);
                         }
-                    }, 5000);
-                    
-                    // Highlight the connected peers temporarily
-                    consumerPeer.element.style.background = '#0070f3';
-                    workerPeer.element.style.background = '#0070f3';
-                    
-                    setTimeout(() => {
-                        consumerPeer.element.style.background = '#ffffff';
-                        workerPeer.element.style.background = '#ffffff';
+                        consumerPeer.element.style.transform = 'scale(1)';
+                        workerPeer.element.style.transform = 'scale(1)';
                     }, 5000);
                 }
             }
