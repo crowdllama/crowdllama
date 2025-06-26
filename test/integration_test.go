@@ -338,13 +338,9 @@ func stepInitWorkerFull(
 func stepSetupWorkerMetadataFull(t *testing.T, workerInstance *worker.Worker) {
 	t.Helper()
 	workerInstance.SetupMetadataHandler()
-	workerInstance.UpdateMetadata(
-		[]string{"tinyllama"},
-		100.0,
-		8,
-		0.1,
-		"RTX 4090",
-	)
+	if err := workerInstance.UpdateMetadata(); err != nil {
+		t.Fatalf("UpdateMetadata failed: %v", err)
+	}
 }
 
 func stepAdvertiseWorkerFull(ctx context.Context, t *testing.T, workerInstance *worker.Worker) {
