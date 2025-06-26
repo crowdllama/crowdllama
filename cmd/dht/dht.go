@@ -19,8 +19,21 @@ import (
 )
 
 func main() {
-	if err := runDHTServer(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	if len(os.Args) < 2 {
+		fmt.Println("Usage: crowdllama-dht <command> [options]")
+		fmt.Println("Commands:")
+		fmt.Println("  start     Start the DHT server")
+		return
+	}
+
+	switch os.Args[1] {
+	case "start":
+		if err := runDHTServer(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return
+		}
+	default:
+		fmt.Printf("Unknown command: %s\n", os.Args[1])
 		return
 	}
 }
@@ -77,7 +90,7 @@ func runDHTServer() error {
 func parseDHTConfig(startCmd *flag.FlagSet) (*config.Configuration, error) {
 	cfg := config.NewConfiguration()
 	cfg.ParseFlags(startCmd)
-	if err := startCmd.Parse(os.Args[1:]); err != nil {
+	if err := startCmd.Parse(os.Args[2:]); err != nil {
 		return nil, fmt.Errorf("failed to parse args: %w", err)
 	}
 	return cfg, nil
