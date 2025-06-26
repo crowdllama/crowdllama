@@ -3,8 +3,10 @@ package consumer
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/http"
 	"os"
 	"sync"
@@ -326,9 +328,6 @@ func (c *Consumer) RequestInference(ctx context.Context, workerID, input string)
 		}
 		if n > 0 {
 			response += string(buf[:n])
-			c.logger.Debug("Read byte from stream",
-				zap.String("byte", string(buf[:n])),
-				zap.Int("ascii", int(buf[0])))
 		}
 	}
 
@@ -401,7 +400,7 @@ func (c *Consumer) FindBestWorker(ctx context.Context, requiredModel string) (*c
 	}
 }
 
-// findBestWorkerFromCache finds the best worker from the cached worker map
+// findBestWorkerFromCache finds a suitable worker from the cached worker map using randomized selection
 func (c *Consumer) findBestWorkerFromCache(requiredModel string) *crowdllama.Resource {
 	c.workersMutex.RLock()
 	defer c.workersMutex.RUnlock()
@@ -410,10 +409,8 @@ func (c *Consumer) findBestWorkerFromCache(requiredModel string) *crowdllama.Res
 		return nil
 	}
 
-	// Find the best worker based on criteria
-	var bestWorker *crowdllama.Resource
-	var bestScore float64
-
+	// Collect all workers that support the required model
+	var suitableWorkers []*crowdllama.Resource
 	for _, info := range c.workers {
 		worker := info.Resource
 
@@ -426,20 +423,44 @@ func (c *Consumer) findBestWorkerFromCache(requiredModel string) *crowdllama.Res
 			}
 		}
 
-		if !supportsModel {
-			continue
-		}
-
-		// Calculate score based on throughput and load
-		score := worker.TokensThroughput * (1.0 - worker.Load)
-
-		if bestWorker == nil || score > bestScore {
-			bestWorker = worker
-			bestScore = score
+		if supportsModel {
+			suitableWorkers = append(suitableWorkers, worker)
 		}
 	}
 
-	return bestWorker
+	if len(suitableWorkers) == 0 {
+		return nil
+	}
+
+	// Randomly select a worker from the suitable ones
+	randomIndex, err := rand.Int(rand.Reader, big.NewInt(int64(len(suitableWorkers))))
+	if err != nil {
+		// Fallback to first worker if random generation fails
+		c.logger.Warn("Failed to generate random index, using first worker", zap.Error(err))
+		selectedWorker := suitableWorkers[0]
+		c.logger.Info("Worker picked for inference task",
+			zap.String("worker_id", selectedWorker.PeerID),
+			zap.String("model", requiredModel),
+			zap.String("gpu_model", selectedWorker.GPUModel),
+			zap.Float64("tokens_throughput", selectedWorker.TokensThroughput),
+			zap.Float64("current_load", selectedWorker.Load),
+			zap.Int("total_suitable_workers", len(suitableWorkers)))
+		return selectedWorker
+	}
+
+	selectedIndex := int(randomIndex.Int64())
+	selectedWorker := suitableWorkers[selectedIndex]
+
+	// Log the worker selection
+	c.logger.Info("Worker picked for inference task",
+		zap.String("worker_id", selectedWorker.PeerID),
+		zap.String("model", requiredModel),
+		zap.String("gpu_model", selectedWorker.GPUModel),
+		zap.Float64("tokens_throughput", selectedWorker.TokensThroughput),
+		zap.Float64("current_load", selectedWorker.Load),
+		zap.Int("total_suitable_workers", len(suitableWorkers)))
+
+	return selectedWorker
 }
 
 // DiscoverWorkersViaProviders discovers workers using FindProviders and a namespace-derived CID
