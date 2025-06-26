@@ -1108,34 +1108,35 @@ const metricsHTML = `<!DOCTYPE html>
         /* Inference connection */
         .inference-connection {
             position: absolute;
-            height: 3px;
+            height: 4px;
             background: repeating-linear-gradient(
                 90deg,
                 #0070f3 0px,
-                #0070f3 10px,
-                transparent 10px,
-                transparent 20px
+                #0070f3 12px,
+                transparent 12px,
+                transparent 24px
             );
             z-index: 4;
-            animation: dataTransfer 0.8s linear infinite;
-            box-shadow: 0 0 15px rgba(0, 112, 243, 0.8);
+            animation: dataTransfer 0.6s linear infinite;
+            box-shadow: 0 0 20px rgba(0, 112, 243, 1);
             border-radius: 2px;
+            opacity: 0.9;
         }
         
         @keyframes dataTransfer {
             0% { 
                 background-position: 0 0;
-                opacity: 0.8;
-                box-shadow: 0 0 15px rgba(0, 112, 243, 0.8);
+                opacity: 0.9;
+                box-shadow: 0 0 20px rgba(0, 112, 243, 1);
             }
             50% { 
                 opacity: 1;
-                box-shadow: 0 0 25px rgba(0, 112, 243, 1);
+                box-shadow: 0 0 30px rgba(0, 112, 243, 1.2);
             }
             100% { 
-                background-position: -20px 0;
-                opacity: 0.8;
-                box-shadow: 0 0 15px rgba(0, 112, 243, 0.8);
+                background-position: -24px 0;
+                opacity: 0.9;
+                box-shadow: 0 0 20px rgba(0, 112, 243, 1);
             }
         }
         
@@ -1484,6 +1485,7 @@ const metricsHTML = `<!DOCTYPE html>
             }
             
             handleInferenceCompleted(data) {
+                console.log('Received inference completed event:', data);
                 this.addInferenceTask(data);
             }
             
@@ -1593,16 +1595,21 @@ const metricsHTML = `<!DOCTYPE html>
             }
             
             addInferenceTask(task) {
+                console.log('Adding inference task:', task);
                 this.inferenceCount++;
                 
                 const taskData = {
                     id: task.id,
-                    consumerPeerId: task.consumer_peer.substring(0, 12) + '...',
-                    workerPeerId: task.worker_peer.substring(0, 12) + '...',
+                    consumerPeerId: task.consumer_peer, // Keep full peer ID
+                    workerPeerId: task.worker_peer,     // Keep full peer ID
+                    consumerPeerIdShort: task.consumer_peer.substring(0, 12) + '...',
+                    workerPeerIdShort: task.worker_peer.substring(0, 12) + '...',
                     model: task.model,
                     elapsedMs: task.elapsed_ms,
                     timestamp: new Date(task.timestamp).toLocaleTimeString()
                 };
+                
+                console.log('Processed task data:', taskData);
                 
                 this.inferenceTasks.unshift(taskData);
                 
@@ -1616,9 +1623,16 @@ const metricsHTML = `<!DOCTYPE html>
             }
             
             createInferenceConnection(taskData) {
-                // Find the consumer and worker peers by full peer ID
-                const consumerPeer = this.peers.find(p => p.data.id === taskData.consumerPeerId.replace('...', ''));
-                const workerPeer = this.peers.find(p => p.data.id === taskData.workerPeerId.replace('...', ''));
+                console.log('Creating inference connection for task:', taskData);
+                console.log('Available peers:', this.peers.map(p => ({ id: p.data.id, type: p.data.type })));
+                
+                // Find the consumer and worker peers by matching peer IDs
+                // The task data contains full peer IDs, so we need to match them properly
+                const consumerPeer = this.peers.find(p => p.data.id === taskData.consumerPeerId);
+                const workerPeer = this.peers.find(p => p.data.id === taskData.workerPeerId);
+                
+                console.log('Found consumer peer:', consumerPeer ? consumerPeer.data.id : 'NOT FOUND');
+                console.log('Found worker peer:', workerPeer ? workerPeer.data.id : 'NOT FOUND');
                 
                 if (consumerPeer && workerPeer) {
                     const consumerRect = consumerPeer.element.getBoundingClientRect();
@@ -1628,6 +1642,8 @@ const metricsHTML = `<!DOCTYPE html>
                     const consumerY = consumerRect.top + consumerRect.height / 2;
                     const workerX = workerRect.left + workerRect.width / 2;
                     const workerY = workerRect.top + workerRect.height / 2;
+                    
+                    console.log('Creating connection from', consumerX, consumerY, 'to', workerX, workerY);
                     
                     // Create animated data transfer connection
                     const connection = document.createElement('div');
@@ -1644,6 +1660,7 @@ const metricsHTML = `<!DOCTYPE html>
                     connection.style.transformOrigin = '0 50%';
                     
                     this.container.appendChild(connection);
+                    console.log('Inference connection created and added to DOM');
                     
                     // Highlight the connected peers temporarily
                     consumerPeer.element.style.transform = 'scale(1.8)';
@@ -1653,10 +1670,17 @@ const metricsHTML = `<!DOCTYPE html>
                     setTimeout(() => {
                         if (connection.parentNode) {
                             connection.parentNode.removeChild(connection);
+                            console.log('Inference connection removed');
                         }
                         consumerPeer.element.style.transform = 'scale(1)';
                         workerPeer.element.style.transform = 'scale(1)';
                     }, 5000);
+                } else {
+                    console.warn('Could not find peers for inference connection:', {
+                        consumerPeerId: taskData.consumerPeerId,
+                        workerPeerId: taskData.workerPeerId,
+                        availablePeers: this.peers.map(p => p.data.id)
+                    });
                 }
             }
             
@@ -1679,11 +1703,11 @@ const metricsHTML = `<!DOCTYPE html>
                         '<div class="inference-details">' +
                             '<div class="inference-detail">' +
                                 '<div class="inference-detail-label">From Peer</div>' +
-                                '<div class="inference-detail-value peer-id">' + task.consumerPeerId + '</div>' +
+                                '<div class="inference-detail-value peer-id">' + task.consumerPeerIdShort + '</div>' +
                             '</div>' +
                             '<div class="inference-detail">' +
                                 '<div class="inference-detail-label">To Peer</div>' +
-                                '<div class="inference-detail-value peer-id">' + task.workerPeerId + '</div>' +
+                                '<div class="inference-detail-value peer-id">' + task.workerPeerIdShort + '</div>' +
                             '</div>' +
                             '<div class="inference-detail">' +
                                 '<div class="inference-detail-label">Model</div>' +
