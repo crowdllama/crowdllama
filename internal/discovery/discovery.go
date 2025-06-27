@@ -42,8 +42,8 @@ var defaultListenAddrs = []string{"/ip4/0.0.0.0/tcp/0"}
 const (
 	// defaultBootstrapPeerAddr is the default bootstrap peer address for the DHT:
 	// TODO: allow CLI to pass custom peers
-	// defaultBootstrapPeerAddr = "/ip4/192.168.0.17/tcp/9000/p2p/12D3KooWJzvh2T7Htr1Dr86batqcAf4c5wB8D16zfkM2xJFpoahy"
-	defaultBootstrapPeerAddr = "/dns4/dht.crowdllama.ai/tcp/9000/p2p/12D3KooWGDXKRromTN8jFpxzBqFKoxVzD3feaBpKBnj9YCLbakpw"
+	defaultBootstrapPeerAddr = "/ip4/127.0.0.1/tcp/9000/p2p/12D3KooWLLUBEZhkEq6NtTLD99RRpEYdcbe8uzx3L56UgF5VK4bw"
+	// defaultBootstrapPeerAddr = "/dns4/dht.crowdllama.ai/tcp/9000/p2p/12D3KooWGDXKRromTN8jFpxzBqFKoxVzD3feaBpKBnj9YCLbakpw"
 	// hardcoded dns bootstrap dht:
 	// defaultBootstrapPeerAddr = "/dns4/dht.crowdllama.com/tcp/9000/p2p/12D3KooWJB3rAu12osvuqJDo2ncCN8VqQmVkecwgDxxu1AN7fmeR"
 )
@@ -159,6 +159,16 @@ func WaitForShutdown() {
 // GetWorkerNamespaceCID generates the CID for worker discovery namespace
 func GetWorkerNamespaceCID() (cid.Cid, error) {
 	namespace := crowdllama.WorkerNamespace
+	mh, err := multihash.Sum([]byte(namespace), multihash.IDENTITY, -1)
+	if err != nil {
+		return cid.Undef, fmt.Errorf("failed to create multihash for namespace: %w", err)
+	}
+	return cid.NewCidV1(cid.Raw, mh), nil
+}
+
+// GetConsumerNamespaceCID generates the CID for consumer discovery namespace
+func GetConsumerNamespaceCID() (cid.Cid, error) {
+	namespace := crowdllama.ConsumerNamespace
 	mh, err := multihash.Sum([]byte(namespace), multihash.IDENTITY, -1)
 	if err != nil {
 		return cid.Undef, fmt.Errorf("failed to create multihash for namespace: %w", err)
@@ -306,4 +316,37 @@ func DiscoverWorkers(ctx context.Context, kadDHT *dht.IpfsDHT, logger *zap.Logge
 	}
 
 	return workers, nil
+}
+
+// DiscoverConsumers discovers available consumers in the DHT
+func DiscoverConsumers(ctx context.Context, kadDHT *dht.IpfsDHT, logger *zap.Logger) ([]*crowdllama.Resource, error) {
+	namespaceCID, err := GetConsumerNamespaceCID()
+	if err != nil {
+		return nil, fmt.Errorf("get consumer namespace CID: %w", err)
+	}
+
+	// Find providers for the consumer namespace
+	providers := kadDHT.FindProvidersAsync(ctx, namespaceCID, 10)
+
+	var consumers []*crowdllama.Resource
+	seenPeers := make(map[peer.ID]bool)
+
+	for provider := range providers {
+		if seenPeers[provider.ID] {
+			continue
+		}
+		seenPeers[provider.ID] = true
+
+		// Create a basic resource for the consumer
+		consumer := &crowdllama.Resource{
+			PeerID:          provider.ID.String(),
+			SupportedModels: []string{}, // Consumers don't have models
+			LastUpdated:     time.Now(),
+		}
+
+		consumers = append(consumers, consumer)
+		logger.Debug("Found consumer", zap.String("peer_id", provider.ID.String()))
+	}
+
+	return consumers, nil
 }

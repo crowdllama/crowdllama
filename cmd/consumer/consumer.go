@@ -124,6 +124,10 @@ func startConsumerServices(c *consumer.Consumer, port int, logger *zap.Logger) {
 	c.StartBackgroundDiscovery()
 	logger.Info("Background worker discovery started")
 
+	// Start consumer advertisement in the DHT
+	c.AdvertiseConsumer(context.Background())
+	logger.Info("Consumer advertisement started")
+
 	go func() {
 		if err := c.StartHTTPServer(port); err != nil {
 			logger.Fatal("HTTP server failed", zap.Error(err))

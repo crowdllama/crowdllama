@@ -290,6 +290,69 @@ func (u *Server) discoverWorkers() {
 			u.allPeersMutex.Unlock()
 		}
 	}
+
+	// Also discover consumers
+	u.discoverConsumers()
+}
+
+// discoverConsumers discovers available consumers in the DHT
+func (u *Server) discoverConsumers() {
+	consumers, err := discovery.DiscoverConsumers(u.discoveryCtx, u.dht, u.logger)
+	if err != nil {
+		u.logger.Error("Failed to discover consumers", zap.Error(err))
+		return
+	}
+
+	u.logger.Info("Discovered consumers", zap.Int("count", len(consumers)))
+
+	now := time.Now()
+	for _, consumer := range consumers {
+		// Check if this consumer is already known
+		u.allPeersMutex.Lock()
+		if _, exists := u.allPeers[consumer.PeerID]; !exists {
+			// Generate random position using crypto/rand
+			xBytes := make([]byte, 4)
+			yBytes := make([]byte, 4)
+			if _, err := cryptorand.Read(xBytes); err != nil {
+				u.logger.Error("Failed to generate random x position for consumer", zap.Error(err))
+				u.allPeersMutex.Unlock()
+				continue
+			}
+			if _, err := cryptorand.Read(yBytes); err != nil {
+				u.logger.Error("Failed to generate random y position for consumer", zap.Error(err))
+				u.allPeersMutex.Unlock()
+				continue
+			}
+			x := int(xBytes[0])%700 + 100
+			y := int(yBytes[0])%500 + 100
+
+			u.logger.Debug("New consumer found", zap.String("peer_id", consumer.PeerID))
+
+			u.allPeers[consumer.PeerID] = &PeerInfo{
+				ID:        consumer.PeerID,
+				Type:      "consumer",
+				FirstSeen: now,
+				LastSeen:  now,
+				X:         x,
+				Y:         y,
+			}
+
+			// Broadcast new peer event
+			u.broadcastEvent("peer_joined", map[string]interface{}{
+				"peer_id": consumer.PeerID,
+				"type":    "consumer",
+				"models":  []string{},
+				"x":       x,
+				"y":       y,
+			})
+		} else {
+			// Update last seen time for existing consumers
+			if peerInfo, exists := u.allPeers[consumer.PeerID]; exists {
+				peerInfo.LastSeen = now
+			}
+		}
+		u.allPeersMutex.Unlock()
+	}
 }
 
 // getAllPeers returns all known peers (workers and consumers)

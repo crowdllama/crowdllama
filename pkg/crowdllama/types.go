@@ -21,6 +21,9 @@ const (
 
 	// WorkerNamespace is the namespace used for worker discovery in the DHT
 	WorkerNamespace = "crowdllama-demo-namespace"
+
+	// ConsumerNamespace is the namespace used for consumer discovery in the DHT
+	ConsumerNamespace = "crowdllama-consumer-namespace"
 )
 
 // Resource represents a CrowdLlama resource (worker metadata)

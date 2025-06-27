@@ -483,7 +483,6 @@ func (c *Consumer) DiscoverWorkersViaProviders(ctx context.Context, namespace st
 // StartBackgroundDiscovery starts the background worker discovery process
 func (c *Consumer) StartBackgroundDiscovery() {
 	c.logger.Info("Starting background worker discovery")
-
 	go func() {
 		// Use shorter interval for testing environments
 		discoveryInterval := DiscoveryInterval
@@ -510,6 +509,48 @@ func (c *Consumer) StartBackgroundDiscovery() {
 
 	// Start cleanup goroutine
 	go c.cleanupStaleWorkers()
+}
+
+// AdvertiseConsumer announces the consumer in the DHT for discovery
+func (c *Consumer) AdvertiseConsumer(ctx context.Context) {
+	go func() {
+		// Use shorter interval for testing environments
+		advertiseInterval := 5 * time.Second
+		if os.Getenv("CROW DLLAMA_TEST_MODE") == "1" {
+			advertiseInterval = 2 * time.Second
+		}
+
+		ticker := time.NewTicker(advertiseInterval)
+		defer ticker.Stop()
+
+		// Get the consumer namespace CID
+		namespaceCID, err := discovery.GetConsumerNamespaceCID()
+		if err != nil {
+			c.logger.Error("Failed to get consumer namespace CID", zap.Error(err))
+			return
+		}
+
+		c.logger.Info("Starting consumer advertisement",
+			zap.String("peer_id", c.Host.ID().String()),
+			zap.String("namespace_cid", namespaceCID.String()))
+
+		for {
+			select {
+			case <-ticker.C:
+				// Advertise the consumer using Provide
+				err := c.DHT.Provide(ctx, namespaceCID, true)
+				if err != nil {
+					c.logger.Error("Failed to advertise consumer", zap.Error(err))
+				} else {
+					c.logger.Debug("Consumer advertised successfully",
+						zap.String("namespace_cid", namespaceCID.String()))
+				}
+			case <-ctx.Done():
+				c.logger.Info("Consumer advertisement stopped")
+				return
+			}
+		}
+	}()
 }
 
 // runDiscovery performs a single discovery run and updates the worker map
