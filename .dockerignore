@@ -1,0 +1,70 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+README.md
+LICENSE
+SECURITY.md
+
+# Build artifacts
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test files
+*_test.go
+test/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# Docker files (except the one being used)
+Dockerfile*
+!Dockerfile.consumer
+!Dockerfile.worker
+!Dockerfile.dht
+
+# GitHub workflows
+.github/
+
+# Examples
+examples/
+
+# Utils
+utils/
+
+# Binary files
+consumer
+worker
+dht
+ui
+main
+
+# Compressed files
+*.bz2
+
+# Images
+*.png
+*.jpg
+*.jpeg
+*.gif
+
+# HTML files
+*.html 
