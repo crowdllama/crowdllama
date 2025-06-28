@@ -16,8 +16,17 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the dht binary
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o dht ./cmd/dht
+# Build arguments for version information
+ARG VERSION=dev
+ARG COMMIT_HASH=unknown
+ARG BUILD_DATE=unknown
+
+# Build the dht binary with version information
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo \
+    -ldflags "-X github.com/matiasinsaurralde/crowdllama/pkg/version.Version=${VERSION} \
+               -X github.com/matiasinsaurralde/crowdllama/pkg/version.CommitHash=${COMMIT_HASH} \
+               -X github.com/matiasinsaurralde/crowdllama/pkg/version.BuildDate=${BUILD_DATE}" \
+    -o dht ./cmd/dht
 
 # Final stage
 FROM alpine:latest

@@ -136,6 +136,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Fetch all history for git commands
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
@@ -162,14 +164,28 @@ jobs:
           type=semver,pattern={{major}}.{{minor}}
           type=sha,prefix={{branch}}-
 
+    - name: Get commit hash
+      id: commit
+      run: echo "hash=${GITHUB_SHA}" >> $GITHUB_OUTPUT
+
+    - name: Get build date
+      id: date
+      run: echo "date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
+
     - name: Build and push consumer image
       uses: docker/build-push-action@v5
       with:
         context: .
         file: ./Dockerfile.consumer
         push: true
-        tags: ghcr.io/${{ github.repository }}/consumer:latest
+        tags: |
+          ghcr.io/${{ github.repository }}/consumer:latest
+          ghcr.io/${{ github.repository }}/consumer:${{ steps.commit.outputs.hash }}
         labels: ${{ steps.meta.outputs.labels }}
+        build-args: |
+          VERSION=${{ steps.commit.outputs.hash }}
+          COMMIT_HASH=${{ steps.commit.outputs.hash }}
+          BUILD_DATE=${{ steps.date.outputs.date }}
 
     - name: Build and push worker image
       uses: docker/build-push-action@v5
@@ -177,8 +193,14 @@ jobs:
         context: .
         file: ./Dockerfile.worker
         push: true
-        tags: ghcr.io/${{ github.repository }}/worker:latest
+        tags: |
+          ghcr.io/${{ github.repository }}/worker:latest
+          ghcr.io/${{ github.repository }}/worker:${{ steps.commit.outputs.hash }}
         labels: ${{ steps.meta.outputs.labels }}
+        build-args: |
+          VERSION=${{ steps.commit.outputs.hash }}
+          COMMIT_HASH=${{ steps.commit.outputs.hash }}
+          BUILD_DATE=${{ steps.date.outputs.date }}
 
     - name: Build and push dht image
       uses: docker/build-push-action@v5
@@ -186,5 +208,11 @@ jobs:
         context: .
         file: ./Dockerfile.dht
         push: true
-        tags: ghcr.io/${{ github.repository }}/dht:latest
-        labels: ${{ steps.meta.outputs.labels }} 
+        tags: |
+          ghcr.io/${{ github.repository }}/dht:latest
+          ghcr.io/${{ github.repository }}/dht:${{ steps.commit.outputs.hash }}
+        labels: ${{ steps.meta.outputs.labels }}
+        build-args: |
+          VERSION=${{ steps.commit.outputs.hash }}
+          COMMIT_HASH=${{ steps.commit.outputs.hash }}
+          BUILD_DATE=${{ steps.date.outputs.date }} 

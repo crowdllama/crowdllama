@@ -15,10 +15,9 @@ import (
 	"github.com/matiasinsaurralde/crowdllama/internal/keys"
 	"github.com/matiasinsaurralde/crowdllama/pkg/config"
 	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
+	"github.com/matiasinsaurralde/crowdllama/pkg/version"
 	"github.com/matiasinsaurralde/crowdllama/pkg/worker"
 )
-
-const version = "0.1.0"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -31,7 +30,7 @@ func main() {
 
 	switch os.Args[1] {
 	case "version":
-		fmt.Println("crowdllama version", version)
+		fmt.Println(version.String())
 	case "start":
 		if err := runWorker(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)

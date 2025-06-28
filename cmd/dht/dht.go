@@ -16,17 +16,21 @@ import (
 	"github.com/matiasinsaurralde/crowdllama/internal/keys"
 	"github.com/matiasinsaurralde/crowdllama/pkg/config"
 	"github.com/matiasinsaurralde/crowdllama/pkg/dht"
+	"github.com/matiasinsaurralde/crowdllama/pkg/version"
 )
 
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Println("Usage: crowdllama-dht <command> [options]")
 		fmt.Println("Commands:")
+		fmt.Println("  version   Print the version information")
 		fmt.Println("  start     Start the DHT server")
 		return
 	}
 
 	switch os.Args[1] {
+	case "version":
+		fmt.Println(version.String())
 	case "start":
 		if err := runDHTServer(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
