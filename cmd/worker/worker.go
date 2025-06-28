@@ -60,6 +60,8 @@ func runWorker() error {
 		}
 	}()
 
+	logger.Info("CrowdLlama version", zap.String("version", version.String()))
+
 	if cfg.IsVerbose() {
 		logger.Info("Verbose mode enabled")
 	}
