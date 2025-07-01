@@ -13,7 +13,7 @@ import (
 
 // WorkerCfg contains worker-specific configuration
 type WorkerCfg struct {
-	OllamaURL string // URL for Ollama API endpoint
+	OllamaBaseURL string // Base URL for Ollama API endpoint (e.g., "http://localhost:11434")
 }
 
 // ConsumerCfg contains consumer-specific configuration
@@ -23,9 +23,11 @@ type ConsumerCfg struct {
 
 // Configuration is the main configuration structure that embeds worker and consumer configs
 type Configuration struct {
-	Verbose bool
-	KeyPath string // Path to the private key file
-	Logger  *zap.Logger
+	Verbose        bool
+	KeyPath        string // Path to the private key file
+	Logger         *zap.Logger
+	OllamaBaseURL  string
+	BootstrapPeers []string
 	WorkerCfg
 	ConsumerCfg
 }
@@ -33,11 +35,10 @@ type Configuration struct {
 // NewConfiguration creates a new configuration with default values
 func NewConfiguration() *Configuration {
 	return &Configuration{
-		Verbose: false,
-		KeyPath: "", // Will be set to default if not provided
-		WorkerCfg: WorkerCfg{
-			OllamaURL: "http://localhost:11434/api/chat", // Default Ollama URL
-		},
+		Verbose:        false,
+		KeyPath:        "",                       // Will be set to default if not provided
+		OllamaBaseURL:  "http://localhost:11434", // Default Ollama base URL
+		BootstrapPeers: nil,
 	}
 }
 
@@ -45,7 +46,12 @@ func NewConfiguration() *Configuration {
 func (cfg *Configuration) ParseFlags(flagSet *flag.FlagSet) {
 	flagSet.BoolVar(&cfg.Verbose, "verbose", cfg.Verbose, "Enable verbose logging")
 	flagSet.StringVar(&cfg.KeyPath, "key", cfg.KeyPath, "Path to private key file (default: ~/.crowdllama/<component>.key)")
-	flagSet.StringVar(&cfg.WorkerCfg.OllamaURL, "ollama-url", cfg.WorkerCfg.OllamaURL, "URL for Ollama API endpoint")
+	flagSet.StringVar(
+		&cfg.OllamaBaseURL,
+		"ollama-url",
+		cfg.OllamaBaseURL,
+		"Base URL for Ollama API endpoint (e.g., http://localhost:11434)",
+	)
 }
 
 // LoadFromEnvironment loads configuration from environment variables
@@ -68,7 +74,7 @@ func (cfg *Configuration) LoadFromEnvironment() {
 	}
 
 	if viper.IsSet("OLLAMA_URL") {
-		cfg.WorkerCfg.OllamaURL = viper.GetString("OLLAMA_URL")
+		cfg.OllamaBaseURL = viper.GetString("OLLAMA_URL")
 	}
 }
 
@@ -77,9 +83,9 @@ func (cfg *Configuration) IsVerbose() bool {
 	return cfg.Verbose
 }
 
-// GetOllamaURL returns the configured Ollama URL
-func (cfg *Configuration) GetOllamaURL() string {
-	return cfg.WorkerCfg.OllamaURL
+// GetOllamaBaseURL returns the configured Ollama base URL
+func (cfg *Configuration) GetOllamaBaseURL() string {
+	return cfg.OllamaBaseURL
 }
 
 // SetupLogger initializes the zap logger based on configuration

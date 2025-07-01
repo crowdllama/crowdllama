@@ -114,18 +114,30 @@ func TestLoadFromEnvironment(t *testing.T) {
 		t.Errorf("Expected KeyPath to be empty, got %s", cfg.KeyPath)
 	}
 
-	if cfg.GetOllamaURL() != "http://localhost:11434/api/chat" {
-		t.Errorf("Expected OllamaURL to be default, got %s", cfg.GetOllamaURL())
+	if cfg.GetOllamaBaseURL() != "http://localhost:11434" {
+		t.Errorf("Expected OllamaBaseURL to be default, got %s", cfg.GetOllamaBaseURL())
 	}
 
 	// Test case 2: Environment variables set
-	os.Setenv("CROWDLLAMA_VERBOSE", "true")
-	os.Setenv("CROWDLLAMA_KEY_PATH", "/custom/key/path")
-	os.Setenv("CROWDLLAMA_OLLAMA_URL", "http://custom-ollama:11434/api/chat")
+	if err := os.Setenv("CROWDLLAMA_VERBOSE", "true"); err != nil {
+		t.Fatalf("Failed to set CROWDLLAMA_VERBOSE: %v", err)
+	}
+	if err := os.Setenv("CROWDLLAMA_KEY_PATH", "/custom/key/path"); err != nil {
+		t.Fatalf("Failed to set CROWDLLAMA_KEY_PATH: %v", err)
+	}
+	if err := os.Setenv("CROWDLLAMA_OLLAMA_URL", "http://custom-ollama:11434"); err != nil {
+		t.Fatalf("Failed to set CROWDLLAMA_OLLAMA_URL: %v", err)
+	}
 	defer func() {
-		os.Unsetenv("CROWDLLAMA_VERBOSE")
-		os.Unsetenv("CROWDLLAMA_KEY_PATH")
-		os.Unsetenv("CROWDLLAMA_OLLAMA_URL")
+		if err := os.Unsetenv("CROWDLLAMA_VERBOSE"); err != nil {
+			t.Fatalf("Failed to unset CROWDLLAMA_VERBOSE: %v", err)
+		}
+		if err := os.Unsetenv("CROWDLLAMA_KEY_PATH"); err != nil {
+			t.Fatalf("Failed to unset CROWDLLAMA_KEY_PATH: %v", err)
+		}
+		if err := os.Unsetenv("CROWDLLAMA_OLLAMA_URL"); err != nil {
+			t.Fatalf("Failed to unset CROWDLLAMA_OLLAMA_URL: %v", err)
+		}
 	}()
 
 	cfg2 := NewConfiguration()
@@ -139,7 +151,7 @@ func TestLoadFromEnvironment(t *testing.T) {
 		t.Errorf("Expected KeyPath to be /custom/key/path, got %s", cfg2.KeyPath)
 	}
 
-	if cfg2.GetOllamaURL() != "http://custom-ollama:11434/api/chat" {
-		t.Errorf("Expected OllamaURL to be custom, got %s", cfg2.GetOllamaURL())
+	if cfg2.GetOllamaBaseURL() != "http://custom-ollama:11434" {
+		t.Errorf("Expected OllamaBaseURL to be custom, got %s", cfg2.GetOllamaBaseURL())
 	}
 }
