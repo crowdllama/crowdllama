@@ -41,10 +41,7 @@ var defaultListenAddrs = []string{"/ip4/0.0.0.0/tcp/0"}
 
 const (
 	// defaultBootstrapPeerAddr is the default bootstrap peer address for the DHT:
-	// TODO: allow CLI to pass custom peers
 	defaultBootstrapPeerAddr = "/dns4/dht.crowdllama.ai/tcp/9000/p2p/12D3KooWGDXKRromTN8jFpxzBqFKoxVzD3feaBpKBnj9YCLbakpw"
-	// hardcoded dns bootstrap dht:
-	// defaultBootstrapPeerAddr = "/dns4/dht.crowdllama.com/tcp/9000/p2p/12D3KooWJB3rAu12osvuqJDo2ncCN8VqQmVkecwgDxxu1AN7fmeR"
 )
 
 // NewHostAndDHT creates a libp2p host with DHT
@@ -279,7 +276,10 @@ func RequestWorkerMetadata(ctx context.Context, h host.Host, workerPeer peer.ID,
 }
 
 // DiscoverWorkers finds workers advertising the namespace and retrieves their metadata
-func DiscoverWorkers(ctx context.Context, kadDHT *dht.IpfsDHT, logger *zap.Logger) ([]*crowdllama.Resource, error) {
+func DiscoverWorkers(ctx context.Context, kadDHT *dht.IpfsDHT, logger *zap.Logger, peerManager interface {
+	MarkPeerAsRecentlyRemoved(string)
+	IsPeerUnhealthy(string) bool
+}) ([]*crowdllama.Resource, error) {
 	workers := make([]*crowdllama.Resource, 0, 10) // Preallocate with capacity 10
 
 	// Get the namespace CID
@@ -298,7 +298,15 @@ func DiscoverWorkers(ctx context.Context, kadDHT *dht.IpfsDHT, logger *zap.Logge
 	providerCount := 0
 	for provider := range providers {
 		providerCount++
-		logger.Info("Found worker provider", zap.String("peer_id", provider.ID.String()))
+		peerID := provider.ID.String()
+		logger.Info("Found worker provider", zap.String("peer_id", peerID))
+
+		// Check if this peer is already marked as unhealthy or recently removed
+		if peerManager != nil && peerManager.IsPeerUnhealthy(peerID) {
+			logger.Debug("Skipping peer that is already marked as unhealthy",
+				zap.String("peer_id", peerID))
+			continue
+		}
 
 		// Give the worker a moment to set up handlers
 		time.Sleep(100 * time.Millisecond)
@@ -306,31 +314,28 @@ func DiscoverWorkers(ctx context.Context, kadDHT *dht.IpfsDHT, logger *zap.Logge
 		// Request metadata from the worker
 		metadata, err := RequestWorkerMetadata(ctx, kadDHT.Host(), provider.ID, logger)
 		if err != nil {
-			logger.Warn("Failed to get metadata from worker",
-				zap.String("peer_id", provider.ID.String()),
+			logger.Warn("Failed to get metadata from worker, skipping",
+				zap.String("peer_id", peerID),
 				zap.Error(err))
 
-			// Create a placeholder worker with just the peer ID to track this worker
-			// The peer manager will handle marking it as unhealthy
-			placeholderWorker := &crowdllama.Resource{
-				PeerID:      provider.ID.String(),
-				LastUpdated: time.Now().Add(-2 * time.Hour), // Mark as old so it gets cleaned up
+			// Mark the peer as recently removed to prevent repeated connection attempts
+			if peerManager != nil {
+				peerManager.MarkPeerAsRecentlyRemoved(peerID)
 			}
-			workers = append(workers, placeholderWorker)
 			continue
 		}
 
 		// Verify the metadata is recent (within last hour)
 		if time.Since(metadata.LastUpdated) > 1*time.Hour {
 			logger.Warn("Metadata from worker is too old, skipping",
-				zap.String("peer_id", provider.ID.String()),
+				zap.String("peer_id", peerID),
 				zap.Time("last_updated", metadata.LastUpdated))
 			continue
 		}
 
 		workers = append(workers, metadata)
 		logger.Info("Found worker",
-			zap.String("peer_id", provider.ID.String()),
+			zap.String("peer_id", peerID),
 			zap.String("gpu_model", metadata.GPUModel),
 			zap.Strings("supported_models", metadata.SupportedModels))
 	}

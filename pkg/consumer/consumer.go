@@ -378,7 +378,7 @@ func (c *Consumer) ListKnownPeersLoop() {
 
 // DiscoverWorkers searches for available workers in the DHT
 func (c *Consumer) DiscoverWorkers(ctx context.Context) ([]*crowdllama.Resource, error) {
-	workers, err := discovery.DiscoverWorkers(ctx, c.DHT, c.logger)
+	workers, err := discovery.DiscoverWorkers(ctx, c.DHT, c.logger, c.peerManager)
 	if err != nil {
 		return nil, fmt.Errorf("discover workers: %w", err)
 	}
@@ -544,14 +544,33 @@ func (c *Consumer) runDiscovery() {
 	}
 
 	updatedCount := 0
+	skippedCount := 0
 	for _, worker := range workers {
+		// Check if this worker is already marked as unhealthy or recently removed
+		if c.peerManager.IsPeerUnhealthy(worker.PeerID) {
+			c.logger.Debug("Skipping unhealthy worker",
+				zap.String("worker_peer_id", worker.PeerID))
+			skippedCount++
+			continue
+		}
+
+		// Additional check: skip workers with old metadata
+		if time.Since(worker.LastUpdated) > 1*time.Hour {
+			c.logger.Debug("Skipping worker with old metadata",
+				zap.String("worker_peer_id", worker.PeerID),
+				zap.Time("last_updated", worker.LastUpdated))
+			skippedCount++
+			continue
+		}
+
 		c.peerManager.AddOrUpdatePeer(worker.PeerID, worker)
 		updatedCount++
 	}
 
-	if updatedCount > 0 {
-		c.logger.Info("Background discovery updated workers",
+	if updatedCount > 0 || skippedCount > 0 {
+		c.logger.Info("Background discovery completed",
 			zap.Int("updated_count", updatedCount),
+			zap.Int("skipped_count", skippedCount),
 			zap.Int("total_workers", len(c.peerManager.GetAllPeers())))
 	}
 }

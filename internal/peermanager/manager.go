@@ -126,6 +126,15 @@ func (pm *Manager) RemovePeer(peerID string) {
 	pm.logger.Info("Removed peer from manager", zap.String("peer_id", peerID))
 }
 
+// MarkPeerAsRecentlyRemoved marks a peer as recently removed without removing it from the peers map
+// This is useful for peers that fail to connect during discovery
+func (pm *Manager) MarkPeerAsRecentlyRemoved(peerID string) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.recentlyRemoved[peerID] = time.Now()
+	pm.logger.Debug("Marked peer as recently removed", zap.String("peer_id", peerID))
+}
+
 func (pm *Manager) GetHealthyPeers() map[string]*PeerInfo {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
@@ -158,9 +167,9 @@ func (pm *Manager) IsPeerUnhealthy(peerID string) bool {
 		return !info.IsHealthy || info.FailedAttempts >= pm.config.MaxFailedAttempts
 	}
 
-	// Check if peer was recently removed (within the last 5 minutes)
+	// Check if peer was recently removed (within the last 10 minutes)
 	if removedTime, wasRemoved := pm.recentlyRemoved[peerID]; wasRemoved {
-		if time.Since(removedTime) < 5*time.Minute {
+		if time.Since(removedTime) < 10*time.Minute {
 			return true // Consider recently removed peers as unhealthy
 		}
 		// Clean up old entries
