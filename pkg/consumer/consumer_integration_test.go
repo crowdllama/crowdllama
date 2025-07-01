@@ -14,6 +14,7 @@ import (
 
 	"github.com/matiasinsaurralde/crowdllama/internal/discovery"
 	"github.com/matiasinsaurralde/crowdllama/internal/keys"
+	"github.com/matiasinsaurralde/crowdllama/pkg/config"
 	"github.com/matiasinsaurralde/crowdllama/pkg/dht"
 )
 
@@ -83,7 +84,12 @@ func TestConsumerDHTIntegration(t *testing.T) {
 	dhtPeerAddr := stepStartDHTServer(t, dhtServer)
 	stepLogDHTServerInfo(t, dhtServer, dhtPeerAddr)
 
-	consumer := stepInitConsumer(ctx, t, logger, consumerPrivKey, dhtPeerAddr)
+	cfg := config.NewConfiguration()
+	cfg.BootstrapPeers = []string{dhtPeerAddr}
+	consumer, err := NewConsumerWithConfig(ctx, logger, consumerPrivKey, cfg)
+	if err != nil {
+		t.Fatalf("Failed to create consumer: %v", err)
+	}
 	stepLogConsumerInfo(t, consumer)
 	stepWaitForConsumerDiscovery(t, dhtServer, consumer)
 	stepValidateWorkerDiscovery(t, consumer)
@@ -129,15 +135,6 @@ func stepLogDHTServerInfo(t *testing.T, dhtServer *dht.Server, dhtPeerAddr strin
 	t.Helper()
 	t.Logf("DHT server started with peer address: %s", dhtPeerAddr)
 	t.Logf("DHT server peer ID: %s", dhtServer.GetPeerID())
-}
-
-func stepInitConsumer(ctx context.Context, t *testing.T, logger *zap.Logger, consumerPrivKey crypto.PrivKey, dhtPeerAddr string) *Consumer {
-	t.Helper()
-	consumer, err := NewConsumerWithBootstrapPeers(ctx, logger, consumerPrivKey, []string{dhtPeerAddr})
-	if err != nil {
-		t.Fatalf("Failed to create consumer: %v", err)
-	}
-	return consumer
 }
 
 func stepLogConsumerInfo(t *testing.T, consumer *Consumer) {
@@ -255,7 +252,9 @@ func TestConsumerWithEmptyBootstrapPeers(t *testing.T) {
 	}
 
 	// Create consumer with empty bootstrap peers (should fallback to defaults)
-	consumer, err := NewConsumerWithBootstrapPeers(ctx, logger, privKey, []string{})
+	cfg := config.NewConfiguration()
+	cfg.BootstrapPeers = []string{}
+	consumer, err := NewConsumerWithConfig(ctx, logger, privKey, cfg)
 	if err != nil {
 		t.Fatalf("Failed to create consumer: %v", err)
 	}
@@ -312,7 +311,9 @@ func TestConsumerWithNilBootstrapPeers(t *testing.T) {
 	}
 
 	// Create consumer with nil bootstrap peers (should fallback to defaults)
-	consumer, err := NewConsumerWithBootstrapPeers(ctx, logger, privKey, nil)
+	cfg := config.NewConfiguration()
+	cfg.BootstrapPeers = nil
+	consumer, err := NewConsumerWithConfig(ctx, logger, privKey, cfg)
 	if err != nil {
 		t.Fatalf("Failed to create consumer: %v", err)
 	}

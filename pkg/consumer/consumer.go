@@ -21,6 +21,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matiasinsaurralde/crowdllama/internal/discovery"
+	"github.com/matiasinsaurralde/crowdllama/pkg/config"
 	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
 )
 
@@ -81,17 +82,12 @@ type workerInfo struct {
 	LastSeen time.Time
 }
 
-// NewConsumer creates a new consumer instance
-func NewConsumer(ctx context.Context, logger *zap.Logger, privKey crypto.PrivKey) (*Consumer, error) {
-	return NewConsumerWithBootstrapPeers(ctx, logger, privKey, nil)
-}
-
-// NewConsumerWithBootstrapPeers creates a new consumer instance with custom bootstrap peers
-func NewConsumerWithBootstrapPeers(
+// NewConsumerWithConfig creates a new consumer instance using the provided configuration
+func NewConsumerWithConfig(
 	ctx context.Context,
 	logger *zap.Logger,
 	privKey crypto.PrivKey,
-	bootstrapPeers []string,
+	cfg *config.Configuration,
 ) (*Consumer, error) {
 	h, kadDHT, err := discovery.NewHostAndDHT(ctx, privKey)
 	if err != nil {
@@ -99,8 +95,8 @@ func NewConsumerWithBootstrapPeers(
 	}
 
 	// Bootstrap with custom peers if provided, otherwise use defaults
-	if len(bootstrapPeers) > 0 {
-		if err := discovery.BootstrapDHTWithPeers(ctx, h, kadDHT, bootstrapPeers); err != nil {
+	if len(cfg.BootstrapPeers) > 0 {
+		if err := discovery.BootstrapDHTWithPeers(ctx, h, kadDHT, cfg.BootstrapPeers); err != nil {
 			return nil, fmt.Errorf("bootstrap DHT with custom peers: %w", err)
 		}
 	} else {
@@ -119,6 +115,11 @@ func NewConsumerWithBootstrapPeers(
 		discoveryCtx:    discoveryCtx,
 		discoveryCancel: discoveryCancel,
 	}, nil
+}
+
+// NewConsumer creates a new consumer instance
+func NewConsumer(ctx context.Context, logger *zap.Logger, privKey crypto.PrivKey, cfg *config.Configuration) (*Consumer, error) {
+	return NewConsumerWithConfig(ctx, logger, privKey, cfg)
 }
 
 // StartHTTPServer starts the HTTP server on the specified port
