@@ -65,7 +65,7 @@ func runWorker() error {
 	if cfg.IsVerbose() {
 		logger.Info("Verbose mode enabled")
 	}
-	logger.Info("Starting crowdllama worker")
+	logger.Info("Starting crowdllama worker", zap.String("ollama_url", cfg.GetOllamaURL()))
 
 	privKey, err := getWorkerPrivateKey(cfg, logger)
 	if err != nil {
@@ -75,7 +75,7 @@ func runWorker() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	w, err := worker.NewWorker(ctx, privKey)
+	w, err := worker.NewWorkerWithBootstrapPeersAndOllamaURL(ctx, privKey, nil, cfg.GetOllamaURL())
 	if err != nil {
 		return fmt.Errorf("failed to start worker: %w", err)
 	}
@@ -94,6 +94,11 @@ func runWorker() error {
 
 func parseWorkerConfig(startCmd *flag.FlagSet) (*config.Configuration, error) {
 	cfg := config.NewConfiguration()
+
+	// Load environment variables first (they can be overridden by command line flags)
+	cfg.LoadFromEnvironment()
+
+	// Parse command line flags (these override environment variables)
 	cfg.ParseFlags(startCmd)
 	if err := startCmd.Parse(os.Args[2:]); err != nil {
 		return nil, fmt.Errorf("failed to parse args: %w", err)

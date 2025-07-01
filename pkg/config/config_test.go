@@ -100,3 +100,46 @@ func TestGetLogger(t *testing.T) {
 		t.Error("Expected GetLogger to return a logger, got nil")
 	}
 }
+
+func TestLoadFromEnvironment(t *testing.T) {
+	// Test case 1: No environment variables set
+	cfg := NewConfiguration()
+	cfg.LoadFromEnvironment()
+
+	if cfg.Verbose != false {
+		t.Errorf("Expected Verbose to be false, got %v", cfg.Verbose)
+	}
+
+	if cfg.KeyPath != "" {
+		t.Errorf("Expected KeyPath to be empty, got %s", cfg.KeyPath)
+	}
+
+	if cfg.GetOllamaURL() != "http://localhost:11434/api/chat" {
+		t.Errorf("Expected OllamaURL to be default, got %s", cfg.GetOllamaURL())
+	}
+
+	// Test case 2: Environment variables set
+	os.Setenv("CROWDLLAMA_VERBOSE", "true")
+	os.Setenv("CROWDLLAMA_KEY_PATH", "/custom/key/path")
+	os.Setenv("CROWDLLAMA_OLLAMA_URL", "http://custom-ollama:11434/api/chat")
+	defer func() {
+		os.Unsetenv("CROWDLLAMA_VERBOSE")
+		os.Unsetenv("CROWDLLAMA_KEY_PATH")
+		os.Unsetenv("CROWDLLAMA_OLLAMA_URL")
+	}()
+
+	cfg2 := NewConfiguration()
+	cfg2.LoadFromEnvironment()
+
+	if cfg2.Verbose != true {
+		t.Errorf("Expected Verbose to be true, got %v", cfg2.Verbose)
+	}
+
+	if cfg2.KeyPath != "/custom/key/path" {
+		t.Errorf("Expected KeyPath to be /custom/key/path, got %s", cfg2.KeyPath)
+	}
+
+	if cfg2.GetOllamaURL() != "http://custom-ollama:11434/api/chat" {
+		t.Errorf("Expected OllamaURL to be custom, got %s", cfg2.GetOllamaURL())
+	}
+}
