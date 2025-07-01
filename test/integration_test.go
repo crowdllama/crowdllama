@@ -20,6 +20,7 @@ import (
 
 	"github.com/matiasinsaurralde/crowdllama/internal/discovery"
 	"github.com/matiasinsaurralde/crowdllama/internal/keys"
+	"github.com/matiasinsaurralde/crowdllama/pkg/config"
 	"github.com/matiasinsaurralde/crowdllama/pkg/consumer"
 	"github.com/matiasinsaurralde/crowdllama/pkg/dht"
 	"github.com/matiasinsaurralde/crowdllama/pkg/worker"
@@ -305,7 +306,12 @@ func stepInitWorkerFull(
 	mockOllamaPort int,
 ) *worker.Worker {
 	t.Helper()
-	mockOllamaURL := fmt.Sprintf("http://localhost:%d/api/chat", mockOllamaPort)
+	mockOllamaBaseURL := fmt.Sprintf("http://localhost:%d", mockOllamaPort)
+
+	// Create config with custom Ollama base URL and bootstrap peers
+	cfg := config.NewConfiguration()
+	cfg.OllamaBaseURL = mockOllamaBaseURL
+	cfg.BootstrapPeers = []string{dhtPeerAddr}
 
 	// Try to create worker with retry logic
 	var workerInstance *worker.Worker
@@ -315,7 +321,7 @@ func stepInitWorkerFull(
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		t.Logf("Attempt %d/%d: Creating worker with bootstrap peer: %s", attempt, maxRetries, dhtPeerAddr)
 
-		workerInstance, err = worker.NewWorkerWithBootstrapPeersAndOllamaURL(ctx, workerPrivKey, []string{dhtPeerAddr}, mockOllamaURL)
+		workerInstance, err = worker.NewWorkerWithConfig(ctx, workerPrivKey, cfg)
 		if err == nil {
 			t.Logf("✅ Worker created successfully on attempt %d", attempt)
 			break
@@ -376,7 +382,9 @@ func stepInitConsumerFull(
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		t.Logf("Attempt %d/%d: Creating consumer with bootstrap peer: %s", attempt, maxRetries, dhtPeerAddr)
 
-		consumerInstance, err = consumer.NewConsumerWithBootstrapPeers(ctx, logger, consumerPrivKey, []string{dhtPeerAddr})
+		cfg := config.NewConfiguration()
+		cfg.BootstrapPeers = []string{dhtPeerAddr}
+		consumerInstance, err = consumer.NewConsumerWithConfig(ctx, logger, consumerPrivKey, cfg)
 		if err == nil {
 			t.Logf("✅ Consumer created successfully on attempt %d", attempt)
 			break
