@@ -275,11 +275,66 @@ func RequestWorkerMetadata(ctx context.Context, h host.Host, workerPeer peer.ID,
 	return metadata, nil
 }
 
+// processProvider handles a single provider from the DHT discovery
+func processProvider(
+	ctx context.Context,
+	provider peer.AddrInfo,
+	kadDHT *dht.IpfsDHT,
+	logger *zap.Logger,
+	peerManager interface {
+		MarkPeerAsRecentlyRemoved(string)
+		IsPeerUnhealthy(string) bool
+	},
+) *crowdllama.Resource {
+	peerID := provider.ID.String()
+	logger.Info("Found worker provider", zap.String("peer_id", peerID))
+
+	// Check if this peer is already marked as unhealthy or recently removed
+	if peerManager != nil && peerManager.IsPeerUnhealthy(peerID) {
+		logger.Debug("Skipping peer that is already marked as unhealthy",
+			zap.String("peer_id", peerID))
+		return nil
+	}
+
+	// Give the worker a moment to set up handlers
+	time.Sleep(100 * time.Millisecond)
+
+	// Request metadata from the worker
+	metadata, err := RequestWorkerMetadata(ctx, kadDHT.Host(), provider.ID, logger)
+	if err != nil {
+		logger.Warn("Failed to get metadata from worker, skipping",
+			zap.String("peer_id", peerID),
+			zap.Error(err))
+
+		// Mark the peer as recently removed to prevent repeated connection attempts
+		if peerManager != nil {
+			peerManager.MarkPeerAsRecentlyRemoved(peerID)
+		}
+		return nil
+	}
+
+	// Verify the metadata is recent (within last hour)
+	if time.Since(metadata.LastUpdated) > 1*time.Hour {
+		logger.Warn("Metadata from worker is too old, skipping",
+			zap.String("peer_id", peerID),
+			zap.Time("last_updated", metadata.LastUpdated))
+		return nil
+	}
+
+	logger.Info("Found worker",
+		zap.String("peer_id", peerID),
+		zap.String("gpu_model", metadata.GPUModel),
+		zap.Strings("supported_models", metadata.SupportedModels))
+
+	return metadata
+}
+
 // DiscoverWorkers finds workers advertising the namespace and retrieves their metadata
 func DiscoverWorkers(ctx context.Context, kadDHT *dht.IpfsDHT, logger *zap.Logger, peerManager interface {
 	MarkPeerAsRecentlyRemoved(string)
 	IsPeerUnhealthy(string) bool
-}) ([]*crowdllama.Resource, error) {
+},
+) ([]*crowdllama.Resource, error) {
 	workers := make([]*crowdllama.Resource, 0, 10) // Preallocate with capacity 10
 
 	// Get the namespace CID
@@ -298,46 +353,10 @@ func DiscoverWorkers(ctx context.Context, kadDHT *dht.IpfsDHT, logger *zap.Logge
 	providerCount := 0
 	for provider := range providers {
 		providerCount++
-		peerID := provider.ID.String()
-		logger.Info("Found worker provider", zap.String("peer_id", peerID))
-
-		// Check if this peer is already marked as unhealthy or recently removed
-		if peerManager != nil && peerManager.IsPeerUnhealthy(peerID) {
-			logger.Debug("Skipping peer that is already marked as unhealthy",
-				zap.String("peer_id", peerID))
-			continue
+		metadata := processProvider(ctx, provider, kadDHT, logger, peerManager)
+		if metadata != nil {
+			workers = append(workers, metadata)
 		}
-
-		// Give the worker a moment to set up handlers
-		time.Sleep(100 * time.Millisecond)
-
-		// Request metadata from the worker
-		metadata, err := RequestWorkerMetadata(ctx, kadDHT.Host(), provider.ID, logger)
-		if err != nil {
-			logger.Warn("Failed to get metadata from worker, skipping",
-				zap.String("peer_id", peerID),
-				zap.Error(err))
-
-			// Mark the peer as recently removed to prevent repeated connection attempts
-			if peerManager != nil {
-				peerManager.MarkPeerAsRecentlyRemoved(peerID)
-			}
-			continue
-		}
-
-		// Verify the metadata is recent (within last hour)
-		if time.Since(metadata.LastUpdated) > 1*time.Hour {
-			logger.Warn("Metadata from worker is too old, skipping",
-				zap.String("peer_id", peerID),
-				zap.Time("last_updated", metadata.LastUpdated))
-			continue
-		}
-
-		workers = append(workers, metadata)
-		logger.Info("Found worker",
-			zap.String("peer_id", peerID),
-			zap.String("gpu_model", metadata.GPUModel),
-			zap.Strings("supported_models", metadata.SupportedModels))
 	}
 
 	logger.Info("Discovery complete",

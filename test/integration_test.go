@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"net"
 	"net/http"
@@ -21,10 +22,10 @@ import (
 	"github.com/matiasinsaurralde/crowdllama/internal/discovery"
 	"github.com/matiasinsaurralde/crowdllama/internal/keys"
 	"github.com/matiasinsaurralde/crowdllama/pkg/config"
-	"github.com/matiasinsaurralde/crowdllama/pkg/consumer"
+	consumerpkg "github.com/matiasinsaurralde/crowdllama/pkg/consumer"
 	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
 	"github.com/matiasinsaurralde/crowdllama/pkg/dht"
-	"github.com/matiasinsaurralde/crowdllama/pkg/worker"
+	workerpkg "github.com/matiasinsaurralde/crowdllama/pkg/worker"
 )
 
 const (
@@ -314,7 +315,7 @@ func stepInitWorkerFull(
 	workerPrivKey crypto.PrivKey,
 	dhtPeerAddr string,
 	mockOllamaPort int,
-) *worker.Worker {
+) *workerpkg.Worker {
 	t.Helper()
 	mockOllamaBaseURL := fmt.Sprintf("http://localhost:%d", mockOllamaPort)
 
@@ -324,14 +325,14 @@ func stepInitWorkerFull(
 	cfg.BootstrapPeers = []string{dhtPeerAddr}
 
 	// Try to create worker with retry logic
-	var workerInstance *worker.Worker
+	var workerInstance *workerpkg.Worker
 	var err error
 	maxRetries := 5
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		t.Logf("Attempt %d/%d: Creating worker with bootstrap peer: %s", attempt, maxRetries, dhtPeerAddr)
 
-		workerInstance, err = worker.NewWorkerWithConfig(ctx, workerPrivKey, cfg)
+		workerInstance, err = workerpkg.NewWorkerWithConfig(ctx, workerPrivKey, cfg)
 		if err == nil {
 			t.Logf("✅ Worker created successfully on attempt %d", attempt)
 			break
@@ -351,7 +352,7 @@ func stepInitWorkerFull(
 	return workerInstance
 }
 
-func stepSetupWorkerMetadataFull(t *testing.T, workerInstance *worker.Worker) {
+func stepSetupWorkerMetadataFull(t *testing.T, workerInstance *workerpkg.Worker) {
 	t.Helper()
 	workerInstance.SetupMetadataHandler()
 	if err := workerInstance.UpdateMetadata(); err != nil {
@@ -359,7 +360,7 @@ func stepSetupWorkerMetadataFull(t *testing.T, workerInstance *worker.Worker) {
 	}
 }
 
-func stepAdvertiseWorkerFull(ctx context.Context, t *testing.T, workerInstance *worker.Worker) {
+func stepAdvertiseWorkerFull(ctx context.Context, t *testing.T, workerInstance *workerpkg.Worker) {
 	t.Helper()
 	workerInstance.AdvertiseModel(ctx, crowdllama.WorkerNamespace)
 }
@@ -370,7 +371,7 @@ func stepInitConsumerFull(
 	logger *zap.Logger,
 	consumerPrivKey crypto.PrivKey,
 	dhtPeerAddr string,
-) *consumer.Consumer {
+) *consumerpkg.Consumer {
 	t.Helper()
 
 	// Debug: Log peer IDs in CI
@@ -385,7 +386,7 @@ func stepInitConsumerFull(
 	}
 
 	// Try to create consumer with retry logic
-	var consumerInstance *consumer.Consumer
+	var consumerInstance *consumerpkg.Consumer
 	var err error
 	maxRetries := 5
 
@@ -394,7 +395,7 @@ func stepInitConsumerFull(
 
 		cfg := config.NewConfiguration()
 		cfg.BootstrapPeers = []string{dhtPeerAddr}
-		consumerInstance, err = consumer.NewConsumerWithConfig(ctx, logger, consumerPrivKey, cfg)
+		consumerInstance, err = consumerpkg.NewConsumerWithConfig(ctx, logger, consumerPrivKey, cfg)
 		if err == nil {
 			t.Logf("✅ Consumer created successfully on attempt %d", attempt)
 			break
@@ -414,12 +415,12 @@ func stepInitConsumerFull(
 	return consumerInstance
 }
 
-func stepStartConsumerDiscoveryFull(t *testing.T, consumerInstance *consumer.Consumer) {
+func stepStartConsumerDiscoveryFull(t *testing.T, consumerInstance *consumerpkg.Consumer) {
 	t.Helper()
 	consumerInstance.StartBackgroundDiscovery()
 }
 
-func stepStartConsumerHTTPServerFull(t *testing.T, consumerInstance *consumer.Consumer, consumerPort int) {
+func stepStartConsumerHTTPServerFull(t *testing.T, consumerInstance *consumerpkg.Consumer, consumerPort int) {
 	t.Helper()
 	go func() {
 		if startErr := consumerInstance.StartHTTPServer(consumerPort); startErr != nil && startErr != http.ErrServerClosed {
@@ -429,7 +430,7 @@ func stepStartConsumerHTTPServerFull(t *testing.T, consumerInstance *consumer.Co
 	time.Sleep(2 * time.Second)
 }
 
-func stepShutdownConsumerHTTPServerFull(t *testing.T, consumerInstance *consumer.Consumer) {
+func stepShutdownConsumerHTTPServerFull(t *testing.T, consumerInstance *consumerpkg.Consumer) {
 	t.Helper()
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
@@ -438,14 +439,22 @@ func stepShutdownConsumerHTTPServerFull(t *testing.T, consumerInstance *consumer
 	}
 }
 
-func stepWaitForDiscoveryFull(t *testing.T, dhtServer *dht.Server, workerInstance *worker.Worker, consumerInstance *consumer.Consumer) {
+func stepWaitForDiscoveryFull(
+	t *testing.T,
+	dhtServer *dht.Server,
+	workerInstance *workerpkg.Worker,
+	consumerInstance *consumerpkg.Consumer,
+) {
 	t.Helper()
 	stepWaitForWorkerDiscovery(t, dhtServer, workerInstance)
-	stepWaitForConsumerDiscovery(t, dhtServer, consumerInstance)
-	stepWaitForWorkerDiscoveryByConsumer(t, consumerInstance, workerInstance)
+	stepWaitForWorkerDiscoveryByConsumer(
+		t,
+		consumerInstance,
+		workerInstance,
+	)
 }
 
-func stepWaitForWorkerDiscovery(t *testing.T, dhtServer *dht.Server, workerInstance *worker.Worker) {
+func stepWaitForWorkerDiscovery(t *testing.T, dhtServer *dht.Server, workerInstance *workerpkg.Worker) {
 	t.Helper()
 	attempt := 0
 	workerFound := false
@@ -467,44 +476,7 @@ func stepWaitForWorkerDiscovery(t *testing.T, dhtServer *dht.Server, workerInsta
 	}
 }
 
-func stepWaitForConsumerDiscovery(t *testing.T, dhtServer *dht.Server, consumerInstance *consumer.Consumer) {
-	t.Helper()
-	attempt := 0
-	consumerFound := false
-	consumerPeerID := consumerInstance.Host.ID().String()
-
-	// Debug: Log consumer connection status in CI
-	if os.Getenv("CI") == ciEnvironment {
-		t.Logf("🔍 CI Debug: Consumer peer ID to find: %s", consumerPeerID)
-		t.Logf("🔍 CI Debug: Consumer connected peers: %v", consumerInstance.Host.Network().Peers())
-		t.Logf("🔍 CI Debug: Consumer addresses: %v", consumerInstance.Host.Addrs())
-	}
-
-	for {
-		attempt++
-		t.Logf("Attempt %d: Checking if consumer is discovered", attempt)
-		if dhtServer.HasPeer(consumerPeerID) {
-			t.Logf("Consumer peer ID %s found in DHT server's connected peers", consumerPeerID)
-			consumerFound = true
-			break
-		}
-
-		// Debug: Log more details in CI
-		if os.Getenv("CI") == ciEnvironment && attempt%10 == 0 {
-			t.Logf("🔍 CI Debug: DHT server connected peers: %v", dhtServer.GetPeers())
-			t.Logf("🔍 CI Debug: Consumer still trying to connect...")
-		}
-
-		time.Sleep(500 * time.Millisecond) // Shorter interval for faster CI testing
-	}
-	if !consumerFound {
-		t.Errorf("Consumer peer ID %s was not found in DHT server after %d attempts", consumerPeerID, attempt)
-	} else {
-		t.Logf("✅ SUCCESS: Consumer peer ID %s found in DHT server", consumerPeerID)
-	}
-}
-
-func stepWaitForWorkerDiscoveryByConsumer(t *testing.T, consumerInstance *consumer.Consumer, workerInstance *worker.Worker) {
+func stepWaitForWorkerDiscoveryByConsumer(t *testing.T, consumerInstance *consumerpkg.Consumer, workerInstance *workerpkg.Worker) {
 	t.Helper()
 	attempt := 0
 	workerFound := false
@@ -717,109 +689,90 @@ func stepShutdownMockOllamaServer(t *testing.T, mockOllama *MockOllamaServer) {
 
 // TestStalePeerRemovalIntegration tests that stale peers are properly removed
 // from both consumer and DHT components using the shared peermanager
-func TestStalePeerRemovalIntegration(t *testing.T) {
-	// Set test mode for faster timeouts
+// TestSetup holds all the components needed for stale peer tests
+type TestSetup struct {
+	ctx         context.Context
+	logger      *zap.Logger
+	cfg         *config.Configuration
+	consumerKey crypto.PrivKey
+	dhtKey      crypto.PrivKey
+	workerKey   crypto.PrivKey
+}
+
+// Helper function to setup test environment
+func setupStalePeerTest(t *testing.T) *TestSetup {
+	t.Helper()
 	if err := os.Setenv("CROWDLLAMA_TEST_MODE", "1"); err != nil {
 		t.Fatalf("Failed to set test mode: %v", err)
 	}
-	defer func() {
-		if err := os.Unsetenv("CROWDLLAMA_TEST_MODE"); err != nil {
-			t.Logf("Failed to unset test mode: %v", err)
-		}
-	}()
-
 	logger := zap.NewNop()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-
-	// Create test configuration
-	cfg := &config.Configuration{
-		BootstrapPeers: []string{},
-	}
-
-	// Generate keys for different components
+	t.Cleanup(func() {
+		cancel()
+		if err := os.Unsetenv("CROWDLLAMA_TEST_MODE"); err != nil {
+			t.Fatalf("Failed to unset test mode: %v", err)
+		}
+	})
+	cfg := &config.Configuration{BootstrapPeers: []string{}}
 	consumerKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
 	if err != nil {
 		t.Fatalf("Failed to generate consumer key: %v", err)
 	}
-
 	dhtKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
 	if err != nil {
 		t.Fatalf("Failed to generate DHT key: %v", err)
 	}
-
 	workerKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
 	if err != nil {
 		t.Fatalf("Failed to generate worker key: %v", err)
 	}
+	return &TestSetup{
+		ctx:         ctx,
+		logger:      logger,
+		cfg:         cfg,
+		consumerKey: consumerKey,
+		dhtKey:      dhtKey,
+		workerKey:   workerKey,
+	}
+}
 
-	// Create DHT server
-	dhtServer, err := dht.NewDHTServerWithAddrs(ctx, dhtKey, logger, []string{"/ip4/127.0.0.1/tcp/0"})
+// Helper function to setup DHT server
+func setupDHTForStalePeerTest(
+	ctx context.Context,
+	t *testing.T,
+	logger *zap.Logger,
+	dhtKey crypto.PrivKey,
+) (dhtServer *dht.Server, dhtAddrs []string) {
+	t.Helper()
+	var err error
+	dhtServer, err = dht.NewDHTServerWithAddrs(ctx, dhtKey, logger, []string{"/ip4/127.0.0.1/tcp/0"})
 	if err != nil {
 		t.Fatalf("Failed to create DHT server: %v", err)
 	}
-	defer dhtServer.Stop()
-
-	// Start DHT server
 	_, err = dhtServer.Start()
 	if err != nil {
 		t.Fatalf("Failed to start DHT server: %v", err)
 	}
-
-	// Give DHT server time to fully bootstrap
 	time.Sleep(3 * time.Second)
-
-	// Get DHT server addresses for bootstrap
-	dhtAddrs := dhtServer.GetPeerAddrs()
+	dhtAddrs = dhtServer.GetPeerAddrs()
 	if len(dhtAddrs) == 0 {
 		t.Fatal("DHT server has no addresses")
 	}
+	return
+}
 
-	// Update config with DHT server addresses
-	cfg.BootstrapPeers = dhtAddrs
-
-	// Create consumer
-	consumer, err := consumer.NewConsumerWithConfig(ctx, logger, consumerKey, cfg)
-	if err != nil {
-		t.Fatalf("Failed to create consumer: %v", err)
-	}
-	defer consumer.StopBackgroundDiscovery()
-
-	// Create worker
-	worker, err := worker.NewWorkerWithConfig(ctx, workerKey, cfg)
-	if err != nil {
-		t.Fatalf("Failed to create worker: %v", err)
-	}
-	defer worker.StopMetadataUpdates()
-
-	// Start all components
-	worker.StartMetadataUpdates()
-	worker.SetupMetadataHandler()
-	worker.AdvertiseModel(ctx, crowdllama.WorkerNamespace)
-
-	// Give the worker time to start advertising
-	time.Sleep(2 * time.Second)
-
-	// Now start consumer discovery after worker has started advertising
-	consumer.StartBackgroundDiscovery()
-
-	// Wait for initial discovery
-	time.Sleep(5 * time.Second)
-
-	// Verify worker is discovered by consumer
+// Helper function to verify initial discovery
+func verifyInitialDiscovery(t *testing.T, consumer *consumerpkg.Consumer, worker *workerpkg.Worker, dhtServer *dht.Server) string {
+	t.Helper()
 	initialWorkers := consumer.GetAvailableWorkers()
 	if len(initialWorkers) == 0 {
 		t.Fatal("No workers discovered initially")
 	}
-
 	workerPeerID := worker.Host.ID().String()
 	if _, exists := initialWorkers[workerPeerID]; !exists {
 		t.Fatalf("Worker %s not found in consumer's worker list", workerPeerID)
 	}
-
 	t.Logf("Initial discovery successful: found %d workers", len(initialWorkers))
-
-	// Verify worker is connected to DHT
 	dhtPeers := dhtServer.GetPeers()
 	workerFoundInDHT := false
 	for _, peerID := range dhtPeers {
@@ -828,22 +781,16 @@ func TestStalePeerRemovalIntegration(t *testing.T) {
 			break
 		}
 	}
-
 	if !workerFoundInDHT {
 		t.Fatalf("Worker %s not found in DHT's peer list", workerPeerID)
 	}
-
 	t.Logf("DHT connection successful: found %d peers", len(dhtPeers))
+	return workerPeerID
+}
 
-	// Stop the worker to simulate it going offline
-	t.Log("Stopping worker to simulate offline behavior...")
-	worker.StopMetadataUpdates()
-
-	// Wait for stale peer timeout (30 seconds in test mode)
-	t.Log("Waiting for stale peer timeout...")
-	time.Sleep(35 * time.Second)
-
-	// Verify worker is removed from consumer
+// Helper function to verify cleanup after worker stops
+func verifyCleanupAfterWorkerStop(t *testing.T, consumer *consumerpkg.Consumer, dhtServer *dht.Server, workerPeerID string) {
+	t.Helper()
 	remainingWorkers := consumer.GetAvailableWorkers()
 	if len(remainingWorkers) > 0 {
 		t.Errorf("Expected no workers after timeout, but found %d", len(remainingWorkers))
@@ -851,8 +798,6 @@ func TestStalePeerRemovalIntegration(t *testing.T) {
 			t.Errorf("Unexpected worker still present: %s", peerID)
 		}
 	}
-
-	// Verify worker is removed from DHT
 	remainingDHTPeers := dhtServer.GetHealthyPeers()
 	workerStillInDHT := false
 	for peerID := range remainingDHTPeers {
@@ -861,29 +806,257 @@ func TestStalePeerRemovalIntegration(t *testing.T) {
 			break
 		}
 	}
-
 	if workerStillInDHT {
 		t.Errorf("Worker %s still present in DHT healthy peers after timeout", workerPeerID)
 	}
-
-	// Check health status to verify cleanup
 	healthStatus := consumer.GetWorkerHealthStatus()
 	if len(healthStatus) > 0 {
 		t.Errorf("Expected no health status entries after cleanup, but found %d", len(healthStatus))
 	}
+}
 
+func TestStalePeerRemovalIntegration(t *testing.T) {
+	setup := setupStalePeerTest(t)
+	dhtServer, dhtAddrs := setupDHTForStalePeerTest(setup.ctx, t, setup.logger, setup.dhtKey)
+	defer dhtServer.Stop()
+	setup.cfg.BootstrapPeers = dhtAddrs
+	consumer, err := consumerpkg.NewConsumerWithConfig(setup.ctx, setup.logger, setup.consumerKey, setup.cfg)
+	if err != nil {
+		t.Fatalf("Failed to create consumer: %v", err)
+	}
+	defer consumer.StopBackgroundDiscovery()
+	worker, err := workerpkg.NewWorkerWithConfig(setup.ctx, setup.workerKey, setup.cfg)
+	if err != nil {
+		t.Fatalf("Failed to create worker: %v", err)
+	}
+	defer worker.StopMetadataUpdates()
+	worker.StartMetadataUpdates()
+	worker.SetupMetadataHandler()
+	worker.AdvertiseModel(setup.ctx, crowdllama.WorkerNamespace)
+	time.Sleep(2 * time.Second)
+	consumer.StartBackgroundDiscovery()
+	time.Sleep(5 * time.Second)
+	workerPeerID := verifyInitialDiscovery(t, consumer, worker, dhtServer)
+	t.Log("Stopping worker to simulate offline behavior...")
+	worker.StopMetadataUpdates()
+	t.Log("Waiting for stale peer timeout...")
+	time.Sleep(35 * time.Second)
+	verifyCleanupAfterWorkerStop(t, consumer, dhtServer, workerPeerID)
 	t.Log("Stale peer removal test completed successfully")
 }
 
-// TestPeerManagerHealthChecks tests that health checks work correctly
+func createAndStartWorker(ctx context.Context, t *testing.T, workerKey crypto.PrivKey, cfg *config.Configuration) *workerpkg.Worker {
+	t.Helper()
+	worker, err := workerpkg.NewWorker(ctx, workerKey, cfg)
+	if err != nil {
+		t.Fatalf("Failed to create worker: %v", err)
+	}
+
+	// Set up metadata handler and start updates
+	worker.SetupMetadataHandler()
+	worker.StartMetadataUpdates()
+
+	// Advertise the worker on the DHT
+	worker.AdvertiseModel(ctx, crowdllama.WorkerNamespace)
+
+	return worker
+}
+
+func createAndStartConsumer(
+	ctx context.Context,
+	t *testing.T,
+	logger *zap.Logger,
+	consumerKey crypto.PrivKey,
+	cfg *config.Configuration,
+) *consumerpkg.Consumer {
+	t.Helper()
+	consumer, err := consumerpkg.NewConsumer(ctx, logger, consumerKey, cfg)
+	if err != nil {
+		t.Fatalf("Failed to create consumer: %v", err)
+	}
+	consumer.StartBackgroundDiscovery()
+	return consumer
+}
+
+func assertWorkerMetadata(t *testing.T, workerResource *crowdllama.Resource) {
+	t.Helper()
+	if workerResource.PeerID == "" {
+		t.Error("Worker PeerID should not be empty")
+	}
+	if workerResource.GPUModel == "" {
+		t.Error("Worker GPU model should not be empty")
+	}
+	if workerResource.VRAMGB <= 0 {
+		t.Error("Worker VRAM should be greater than 0")
+	}
+	if len(workerResource.SupportedModels) == 0 {
+		t.Error("Worker should support at least one model")
+	}
+	if workerResource.TokensThroughput <= 0 {
+		t.Error("Worker tokens throughput should be greater than 0")
+	}
+}
+
+// Helper to create an isolated DHT bootstrap node for each test
+func createIsolatedTestDHT(
+	ctx context.Context,
+	t *testing.T,
+	logger *zap.Logger,
+	port int,
+) (dhtServer *dht.Server, bootstrapAddr string) {
+	t.Helper()
+	bootstrapKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
+	if err != nil {
+		t.Fatalf("Failed to generate bootstrap key: %v", err)
+	}
+
+	// Use specific port for isolation
+	listenAddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", port)
+	dhtServer, err = dht.NewDHTServerWithAddrs(ctx, bootstrapKey, logger, []string{listenAddr})
+	if err != nil {
+		t.Fatalf("Failed to create isolated DHT server: %v", err)
+	}
+
+	_, err = dhtServer.Start()
+	if err != nil {
+		t.Fatalf("Failed to start isolated DHT server: %v", err)
+	}
+
+	// Wait for DHT to be ready
+	time.Sleep(2 * time.Second)
+
+	addrs := dhtServer.GetPeerAddrs()
+	if len(addrs) == 0 {
+		t.Fatalf("Isolated DHT server has no addresses")
+	}
+	bootstrapAddr = addrs[0]
+
+	// Additional wait to ensure DHT is fully ready
+	time.Sleep(1 * time.Second)
+
+	return dhtServer, bootstrapAddr
+}
+
+// Helper to get a unique port for each test
+func getTestPort(t *testing.T) int {
+	t.Helper()
+	// Use test name hash to get a consistent port for each test
+	hash := fnv.New32a()
+	if _, err := hash.Write([]byte(t.Name())); err != nil {
+		t.Fatalf("Failed to hash test name for port: %v", err)
+	}
+	port := 10000 + int(hash.Sum32()%5000) // Ports 10000-14999
+	return port
+}
+
+// Update setupTestConfigAndKeys to accept bootstrapAddrs
+func setupTestConfigAndKeysWithBootstrap(
+	t *testing.T,
+	bootstrapAddrs []string,
+) (cfg *config.Configuration, consumerKey, workerKey crypto.PrivKey) {
+	t.Helper()
+	cfg = &config.Configuration{BootstrapPeers: bootstrapAddrs}
+	var err error
+	consumerKey, _, err = crypto.GenerateKeyPair(crypto.Ed25519, 256)
+	if err != nil {
+		t.Fatalf("Failed to generate consumer key: %v", err)
+	}
+	workerKey, _, err = crypto.GenerateKeyPair(crypto.Ed25519, 256)
+	if err != nil {
+		t.Fatalf("Failed to generate worker key: %v", err)
+	}
+	return
+}
+
+// Helper function to reduce cyclomatic complexity
+func waitForWorkers(t *testing.T, consumer *consumerpkg.Consumer, expectedCount int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		workers := consumer.GetAvailableWorkers()
+		if len(workers) == expectedCount {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("Expected %d workers, but found %d after %v", expectedCount, len(consumer.GetAvailableWorkers()), timeout)
+}
+
+// Helper function to wait for worker to be discovered and healthy
+func waitForWorkerHealthy(t *testing.T, consumer *consumerpkg.Consumer, workerPeerID string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		healthStatus := consumer.GetWorkerHealthStatus()
+		if len(healthStatus) > 0 {
+			if workerHealth, exists := healthStatus[workerPeerID]; exists {
+				if workerHealth["is_healthy"].(bool) {
+					return // Worker is healthy
+				}
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("Worker %s did not become healthy within %v", workerPeerID, timeout)
+}
+
+// Helper function to wait for worker to become unhealthy
+func waitForWorkerUnhealthy(t *testing.T, consumer *consumerpkg.Consumer, workerPeerID string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		healthStatus := consumer.GetWorkerHealthStatus()
+		if len(healthStatus) > 0 {
+			if workerHealth, exists := healthStatus[workerPeerID]; exists {
+				if !workerHealth["is_healthy"].(bool) {
+					return // Worker is unhealthy
+				}
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("Worker %s did not become unhealthy within %v", workerPeerID, timeout)
+}
+
+// Helper function to wait for worker to be removed from health status
+func waitForWorkerRemoved(t *testing.T, consumer *consumerpkg.Consumer, workerPeerID string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		healthStatus := consumer.GetWorkerHealthStatus()
+		if len(healthStatus) == 0 {
+			return // All workers removed
+		}
+		if _, exists := healthStatus[workerPeerID]; !exists {
+			return // Specific worker removed
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("Worker %s was not removed within %v", workerPeerID, timeout)
+}
+
+// Helper function to wait for worker discovery
+func waitForWorkerDiscovery(t *testing.T, consumer *consumerpkg.Consumer, workerPeerID string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		workers := consumer.GetAvailableWorkers()
+		if _, exists := workers[workerPeerID]; exists {
+			return // Worker discovered
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("Worker %s was not discovered within %v", workerPeerID, timeout)
+}
+
+// Update all affected tests to use isolated DHT nodes
 func TestPeerManagerHealthChecks(t *testing.T) {
-	// Set test mode for faster timeouts
 	if err := os.Setenv("CROWDLLAMA_TEST_MODE", "1"); err != nil {
 		t.Fatalf("Failed to set test mode: %v", err)
 	}
 	defer func() {
 		if err := os.Unsetenv("CROWDLLAMA_TEST_MODE"); err != nil {
-			t.Logf("Failed to unset test mode: %v", err)
+			t.Fatalf("Failed to unset test mode: %v", err)
 		}
 	}()
 
@@ -891,106 +1064,63 @@ func TestPeerManagerHealthChecks(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	// Create test configuration
-	cfg := &config.Configuration{
-		BootstrapPeers: []string{},
-	}
+	// Create isolated DHT for this test
+	port := getTestPort(t)
+	dhtServer, bootstrapAddr := createIsolatedTestDHT(ctx, t, logger, port)
+	defer dhtServer.Stop()
 
-	// Generate keys
-	consumerKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
-	if err != nil {
-		t.Fatalf("Failed to generate consumer key: %v", err)
-	}
+	cfg, consumerKey, workerKey := setupTestConfigAndKeysWithBootstrap(t, []string{bootstrapAddr})
 
-	workerKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
-	if err != nil {
-		t.Fatalf("Failed to generate worker key: %v", err)
-	}
-
-	// Create consumer and worker
-	consumer, err := consumer.NewConsumerWithConfig(ctx, logger, consumerKey, cfg)
-	if err != nil {
-		t.Fatalf("Failed to create consumer: %v", err)
-	}
+	// Create and start consumer first
+	consumer := createAndStartConsumer(ctx, t, logger, consumerKey, cfg)
 	defer consumer.StopBackgroundDiscovery()
 
-	worker, err := worker.NewWorkerWithConfig(ctx, workerKey, cfg)
-	if err != nil {
-		t.Fatalf("Failed to create worker: %v", err)
-	}
+	// Create and start worker
+	worker := createAndStartWorker(ctx, t, workerKey, cfg)
 	defer worker.StopMetadataUpdates()
 
-	// Start discovery
-	consumer.StartBackgroundDiscovery()
-	worker.StartMetadataUpdates()
-	worker.AdvertiseModel(ctx, crowdllama.WorkerNamespace)
-
-	// Wait for discovery
-	time.Sleep(5 * time.Second)
-
-	// Verify initial health status
-	healthStatus := consumer.GetWorkerHealthStatus()
 	workerPeerID := worker.Host.ID().String()
 
-	if len(healthStatus) == 0 {
-		t.Fatal("No health status entries found")
-	}
+	// Wait for worker to be discovered and healthy
+	waitForWorkerDiscovery(t, consumer, workerPeerID, 15*time.Second)
+	waitForWorkerHealthy(t, consumer, workerPeerID, 10*time.Second)
 
-	workerHealth, exists := healthStatus[workerPeerID]
-	if !exists {
-		t.Fatalf("Worker %s not found in health status", workerPeerID)
-	}
-
-	if !workerHealth["is_healthy"].(bool) {
-		t.Error("Worker should be healthy initially")
-	}
-
-	t.Logf("Initial health check passed: worker %s is healthy", workerPeerID)
-
-	// Simulate worker becoming unhealthy by stopping it
+	// Stop the worker
 	worker.StopMetadataUpdates()
 
-	// Wait for health check to detect the issue
-	time.Sleep(10 * time.Second)
+	// Wait for worker to become unhealthy (should still be in health status)
+	waitForWorkerUnhealthy(t, consumer, workerPeerID, 15*time.Second)
 
-	// Check health status again
+	// Verify the worker is marked as unhealthy but still in health status
 	updatedHealthStatus := consumer.GetWorkerHealthStatus()
 	updatedWorkerHealth, exists := updatedHealthStatus[workerPeerID]
 	if !exists {
 		t.Fatal("Worker should still be in health status even if unhealthy")
 	}
-
 	if updatedWorkerHealth["is_healthy"].(bool) {
 		t.Error("Worker should be marked as unhealthy after stopping")
 	}
-
-	failedAttempts := updatedWorkerHealth["failed_attempts"].(int)
-	if failedAttempts == 0 {
+	if updatedWorkerHealth["failed_attempts"].(int) == 0 {
 		t.Error("Failed attempts should be greater than 0 for unhealthy worker")
 	}
 
-	t.Logf("Health check correctly detected unhealthy worker: failed_attempts=%d", failedAttempts)
+	// Wait for worker to be completely removed from health status
+	waitForWorkerRemoved(t, consumer, workerPeerID, 20*time.Second)
 
-	// Wait for worker to be removed due to repeated failures
-	time.Sleep(20 * time.Second)
-
+	// Final verification that no health status entries remain
 	finalHealthStatus := consumer.GetWorkerHealthStatus()
 	if len(finalHealthStatus) > 0 {
 		t.Errorf("Expected no health status entries after removal, but found %d", len(finalHealthStatus))
 	}
-
-	t.Log("Health check and cleanup test completed successfully")
 }
 
-// TestMetadataValidation tests that metadata validation works correctly
 func TestMetadataValidation(t *testing.T) {
-	// Set test mode
 	if err := os.Setenv("CROWDLLAMA_TEST_MODE", "1"); err != nil {
 		t.Fatalf("Failed to set test mode: %v", err)
 	}
 	defer func() {
 		if err := os.Unsetenv("CROWDLLAMA_TEST_MODE"); err != nil {
-			t.Logf("Failed to unset test mode: %v", err)
+			t.Fatalf("Failed to unset test mode: %v", err)
 		}
 	}()
 
@@ -998,91 +1128,42 @@ func TestMetadataValidation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Create test configuration
-	cfg := &config.Configuration{
-		BootstrapPeers: []string{},
-	}
+	// Create isolated DHT for this test
+	port := getTestPort(t)
+	dhtServer, bootstrapAddr := createIsolatedTestDHT(ctx, t, logger, port)
+	defer dhtServer.Stop()
 
-	// Generate keys
-	consumerKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
-	if err != nil {
-		t.Fatalf("Failed to generate consumer key: %v", err)
-	}
+	cfg, consumerKey, workerKey := setupTestConfigAndKeysWithBootstrap(t, []string{bootstrapAddr})
 
-	workerKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
-	if err != nil {
-		t.Fatalf("Failed to generate worker key: %v", err)
-	}
-
-	// Create consumer and worker
-	consumer, err := consumer.NewConsumerWithConfig(ctx, logger, consumerKey, cfg)
-	if err != nil {
-		t.Fatalf("Failed to create consumer: %v", err)
-	}
+	// Create and start consumer first
+	consumer := createAndStartConsumer(ctx, t, logger, consumerKey, cfg)
 	defer consumer.StopBackgroundDiscovery()
 
-	worker, err := worker.NewWorkerWithConfig(ctx, workerKey, cfg)
-	if err != nil {
-		t.Fatalf("Failed to create worker: %v", err)
-	}
+	// Create and start worker
+	worker := createAndStartWorker(ctx, t, workerKey, cfg)
 	defer worker.StopMetadataUpdates()
 
-	// Start discovery
-	consumer.StartBackgroundDiscovery()
-	worker.StartMetadataUpdates()
-	worker.AdvertiseModel(ctx, crowdllama.WorkerNamespace)
+	// Wait for worker discovery
+	waitForWorkerDiscovery(t, consumer, worker.Host.ID().String(), 15*time.Second)
 
-	// Wait for discovery
-	time.Sleep(5 * time.Second)
-
-	// Verify worker metadata is valid
 	workers := consumer.GetAvailableWorkers()
-	workerPeerID := worker.Host.ID().String()
-
 	if len(workers) == 0 {
 		t.Fatal("No workers discovered")
 	}
-
-	workerResource, exists := workers[workerPeerID]
+	workerResource, exists := workers[worker.Host.ID().String()]
 	if !exists {
-		t.Fatalf("Worker %s not found", workerPeerID)
+		t.Fatalf("Worker %s not found", worker.Host.ID().String())
 	}
-
-	// Validate metadata fields
-	if workerResource.PeerID == "" {
-		t.Error("Worker PeerID should not be empty")
-	}
-
-	if workerResource.GPUModel == "" {
-		t.Error("Worker GPU model should not be empty")
-	}
-
-	if workerResource.VRAMGB <= 0 {
-		t.Error("Worker VRAM should be greater than 0")
-	}
-
-	if len(workerResource.SupportedModels) == 0 {
-		t.Error("Worker should support at least one model")
-	}
-
-	if workerResource.TokensThroughput <= 0 {
-		t.Error("Worker tokens throughput should be greater than 0")
-	}
-
-	t.Logf("Metadata validation passed: worker %s has valid metadata", workerPeerID)
-	t.Logf("GPU Model: %s, VRAM: %dGB, Supported Models: %v",
-		workerResource.GPUModel, workerResource.VRAMGB, workerResource.SupportedModels)
+	assertWorkerMetadata(t, workerResource)
 }
 
-// TestConcurrentPeerManagement tests that peer management works correctly under concurrent access
 func TestConcurrentPeerManagement(t *testing.T) {
-	// Set test mode
 	if err := os.Setenv("CROWDLLAMA_TEST_MODE", "1"); err != nil {
 		t.Fatalf("Failed to set test mode: %v", err)
 	}
 	defer func() {
 		if err := os.Unsetenv("CROWDLLAMA_TEST_MODE"); err != nil {
-			t.Logf("Failed to unset test mode: %v", err)
+			t.Fatalf("Failed to unset test mode: %v", err)
 		}
 	}()
 
@@ -1090,75 +1171,54 @@ func TestConcurrentPeerManagement(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	// Create test configuration
-	cfg := &config.Configuration{
-		BootstrapPeers: []string{},
-	}
+	// Create isolated DHT for this test
+	port := getTestPort(t)
+	dhtServer, bootstrapAddr := createIsolatedTestDHT(ctx, t, logger, port)
+	defer dhtServer.Stop()
 
-	// Generate keys
+	cfg := &config.Configuration{BootstrapPeers: []string{bootstrapAddr}}
 	consumerKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
 	if err != nil {
 		t.Fatalf("Failed to generate consumer key: %v", err)
 	}
 
-	// Create consumer
-	consumer, err := consumer.NewConsumerWithConfig(ctx, logger, consumerKey, cfg)
-	if err != nil {
-		t.Fatalf("Failed to create consumer: %v", err)
-	}
+	// Create and start consumer first
+	consumer := createAndStartConsumer(ctx, t, logger, consumerKey, cfg)
 	defer consumer.StopBackgroundDiscovery()
 
-	// Start discovery
-	consumer.StartBackgroundDiscovery()
-
-	// Create multiple workers concurrently
 	numWorkers := 5
-	workers := make([]*worker.Worker, numWorkers)
+	workers := make([]*workerpkg.Worker, numWorkers)
+	workerPeerIDs := make([]string, numWorkers)
 
+	// Create all workers
 	for i := 0; i < numWorkers; i++ {
 		workerKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
 		if err != nil {
 			t.Fatalf("Failed to generate worker key %d: %v", i, err)
 		}
-
-		worker, err := worker.NewWorkerWithConfig(ctx, workerKey, cfg)
-		if err != nil {
-			t.Fatalf("Failed to create worker %d: %v", i, err)
-		}
-		workers[i] = worker
-		defer worker.StopMetadataUpdates()
-
-		// Start worker discovery
-		worker.StartMetadataUpdates()
-		worker.SetupMetadataHandler()
-		worker.AdvertiseModel(ctx, crowdllama.WorkerNamespace)
+		workers[i] = createAndStartWorker(ctx, t, workerKey, cfg)
+		workerPeerIDs[i] = workers[i].Host.ID().String()
 	}
+
+	defer func() {
+		for _, w := range workers {
+			w.StopMetadataUpdates()
+		}
+	}()
 
 	// Wait for all workers to be discovered
-	time.Sleep(10 * time.Second)
+	waitForWorkers(t, consumer, numWorkers, 15*time.Second)
 
-	// Verify all workers are discovered
-	discoveredWorkers := consumer.GetAvailableWorkers()
-	if len(discoveredWorkers) != numWorkers {
-		t.Errorf("Expected %d workers, but found %d", numWorkers, len(discoveredWorkers))
-	}
-
-	t.Logf("Successfully discovered %d workers concurrently", len(discoveredWorkers))
-
-	// Stop half of the workers
+	// Stop half the workers
 	for i := 0; i < numWorkers/2; i++ {
 		workers[i].StopMetadataUpdates()
 	}
 
-	// Wait for cleanup
-	time.Sleep(35 * time.Second)
-
-	// Verify only healthy workers remain
+	// Wait for workers to be removed
+	time.Sleep(5 * time.Second) // Give some time for health checks to run
 	remainingWorkers := consumer.GetAvailableWorkers()
 	expectedRemaining := numWorkers - numWorkers/2
 	if len(remainingWorkers) != expectedRemaining {
 		t.Errorf("Expected %d remaining workers, but found %d", expectedRemaining, len(remainingWorkers))
 	}
-
-	t.Logf("Concurrent peer management test completed: %d workers remaining", len(remainingWorkers))
 }

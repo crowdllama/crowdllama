@@ -70,10 +70,11 @@ type Manager struct {
 	cancel          context.CancelFunc
 }
 
-func NewManager(ctx context.Context, host host.Host, logger *zap.Logger, config *Config) *Manager {
+// NewManager creates a new peer manager instance
+func NewManager(ctx context.Context, libp2pHost host.Host, logger *zap.Logger, config *Config) *Manager {
 	ctx, cancel := context.WithCancel(ctx)
 	return &Manager{
-		host:            host,
+		host:            libp2pHost,
 		logger:          logger,
 		config:          config,
 		peers:           make(map[string]*PeerInfo),
@@ -83,17 +84,20 @@ func NewManager(ctx context.Context, host host.Host, logger *zap.Logger, config 
 	}
 }
 
+// Start begins the background health check and cleanup loops
 func (pm *Manager) Start() {
 	go pm.healthCheckLoop()
 	go pm.cleanupLoop()
 }
 
+// Stop terminates the background health check and cleanup loops
 func (pm *Manager) Stop() {
 	if pm.cancel != nil {
 		pm.cancel()
 	}
 }
 
+// AddOrUpdatePeer adds a new peer or updates an existing peer's metadata
 func (pm *Manager) AddOrUpdatePeer(peerID string, metadata *crowdllama.Resource) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
@@ -117,6 +121,7 @@ func (pm *Manager) AddOrUpdatePeer(peerID string, metadata *crowdllama.Resource)
 	}
 }
 
+// RemovePeer removes a peer from the manager and marks it as recently removed
 func (pm *Manager) RemovePeer(peerID string) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
@@ -135,6 +140,7 @@ func (pm *Manager) MarkPeerAsRecentlyRemoved(peerID string) {
 	pm.logger.Debug("Marked peer as recently removed", zap.String("peer_id", peerID))
 }
 
+// GetHealthyPeers returns all peers that are currently marked as healthy
 func (pm *Manager) GetHealthyPeers() map[string]*PeerInfo {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
@@ -147,6 +153,7 @@ func (pm *Manager) GetHealthyPeers() map[string]*PeerInfo {
 	return healthy
 }
 
+// GetAllPeers returns all peers in the manager regardless of health status
 func (pm *Manager) GetAllPeers() map[string]*PeerInfo {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
@@ -233,7 +240,9 @@ func (pm *Manager) performHealthChecks() {
 			info.IsHealthy = false
 			pm.logger.Warn("Peer health check failed", zap.String("peer_id", peerID), zap.Int("failed_attempts", info.FailedAttempts))
 			if info.FailedAttempts >= pm.config.MaxFailedAttempts {
-				pm.logger.Info("Marking peer for removal due to repeated failures", zap.String("peer_id", peerID), zap.Int("failed_attempts", info.FailedAttempts))
+				pm.logger.Info("Marking peer for removal due to repeated failures",
+					zap.String("peer_id", peerID),
+					zap.Int("failed_attempts", info.FailedAttempts))
 			}
 		}
 	}
@@ -262,8 +271,10 @@ func (pm *Manager) performCleanup() {
 		if shouldRemove {
 			delete(pm.peers, peerID)
 			removedCount++
-			pm.logger.Info("Removed peer", zap.String("peer_id", peerID), zap.String("reason", reason), zap.Int("failed_attempts", info.FailedAttempts))
-
+			pm.logger.Info("Removed peer",
+				zap.String("peer_id", peerID),
+				zap.String("reason", reason),
+				zap.Int("failed_attempts", info.FailedAttempts))
 		}
 	}
 	if removedCount > 0 {
@@ -311,4 +322,9 @@ func (pm *Manager) ValidateMetadata(metadata *crowdllama.Resource) error {
 		return fmt.Errorf("metadata is too old: %v", metadata.LastUpdated)
 	}
 	return nil
+}
+
+// GetConfig returns the peer manager's configuration
+func (pm *Manager) GetConfig() *Config {
+	return pm.config
 }

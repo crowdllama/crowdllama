@@ -49,57 +49,24 @@ func NewDHTServer(ctx context.Context, privKey crypto.PrivKey, logger *zap.Logge
 func NewDHTServerWithAddrs(ctx context.Context, privKey crypto.PrivKey, logger *zap.Logger, listenAddrs []string) (*Server, error) {
 	ctx, cancel := context.WithCancel(ctx)
 
-	libp2pOpts := []libp2p.Option{
-		libp2p.Identity(privKey),
-		libp2p.ListenAddrStrings(listenAddrs...),
-		libp2p.NATPortMap(),
-	}
-	if os.Getenv("CROWDLLAMA_TEST_MODE") != "1" {
-		// Use static relays for auto-relay functionality
-		staticRelays := []peer.AddrInfo{
-			// Add some well-known libp2p relays here
-			// For now, we'll disable auto-relay to avoid the error
-			// TODO: Add proper static relays when needed
-		}
-
-		libp2pOpts = append(libp2pOpts,
-			libp2p.EnableHolePunching(),
-		)
-
-		// Only enable auto-relay if we have static relays
-		if len(staticRelays) > 0 {
-			libp2pOpts = append(libp2pOpts,
-				libp2p.EnableAutoRelayWithStaticRelays(staticRelays),
-			)
-		}
+	// Use default addresses if none provided
+	if len(listenAddrs) == 0 {
+		listenAddrs = DefaultListenAddrs
 	}
 
-	h, err := libp2p.New(libp2pOpts...)
+	h, err := createLibp2pHost(ctx, privKey, listenAddrs)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("create libp2p host: %w", err)
 	}
 
-	// Create DHT
-	kadDHT, err := dht.New(ctx, h, dht.Mode(dht.ModeServer))
+	kadDHT, err := createDHT(ctx, h)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("create DHT: %w", err)
 	}
 
-	// Initialize peer manager with test configuration if in test mode
-	peerConfig := peermanager.DefaultConfig()
-	if os.Getenv("CROWDLLAMA_TEST_MODE") == "1" {
-		peerConfig = &peermanager.Config{
-			StalePeerTimeout:    30 * time.Second, // Shorter for testing
-			HealthCheckInterval: 5 * time.Second,
-			MaxFailedAttempts:   2,
-			BackoffBase:         5 * time.Second,
-			MetadataTimeout:     2 * time.Second,
-			MaxMetadataAge:      30 * time.Second,
-		}
-	}
-
+	peerConfig := getPeerManagerConfig()
 	server := &Server{
 		Host:        h,
 		DHT:         kadDHT,
@@ -109,25 +76,64 @@ func NewDHTServerWithAddrs(ctx context.Context, privKey crypto.PrivKey, logger *
 		peerManager: peermanager.NewManager(ctx, h, logger, peerConfig),
 	}
 
-	// Generate peer addresses in the required format
-	server.peerAddrs = make([]string, 0, len(h.Addrs()))
-	for _, addr := range h.Addrs() {
-		fullAddr := fmt.Sprintf("%s/p2p/%s", addr.String(), h.ID().String())
-		server.peerAddrs = append(server.peerAddrs, fullAddr)
-	}
-
-	// Ensure we have at least one peer address
+	server.peerAddrs = generatePeerAddrs(h)
 	if len(server.peerAddrs) == 0 {
 		logger.Warn("No peer addresses generated, this may indicate a configuration issue")
 	}
 
-	// Set up connection handlers
 	h.Network().Notify(&network.NotifyBundle{
 		ConnectedF:    server.handlePeerConnected,
 		DisconnectedF: server.handlePeerDisconnected,
 	})
 
 	return server, nil
+}
+
+func createLibp2pHost(_ context.Context, privKey crypto.PrivKey, listenAddrs []string) (host.Host, error) {
+	libp2pOpts := []libp2p.Option{
+		libp2p.Identity(privKey),
+		libp2p.ListenAddrStrings(listenAddrs...),
+		libp2p.DefaultTransports,
+		libp2p.DefaultMuxers,
+		libp2p.DefaultSecurity,
+		libp2p.NATPortMap(),
+	}
+	h, err := libp2p.New(libp2pOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create libp2p host: %w", err)
+	}
+	return h, nil
+}
+
+func createDHT(ctx context.Context, h host.Host) (*dht.IpfsDHT, error) {
+	dhtInstance, err := dht.New(ctx, h, dht.Mode(dht.ModeServer))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create DHT: %w", err)
+	}
+	return dhtInstance, nil
+}
+
+func getPeerManagerConfig() *peermanager.Config {
+	if os.Getenv("CROWDLLAMA_TEST_MODE") == "1" {
+		return &peermanager.Config{
+			StalePeerTimeout:    30 * time.Second,
+			HealthCheckInterval: 5 * time.Second,
+			MaxFailedAttempts:   2,
+			BackoffBase:         5 * time.Second,
+			MetadataTimeout:     2 * time.Second,
+			MaxMetadataAge:      30 * time.Second,
+		}
+	}
+	return peermanager.DefaultConfig()
+}
+
+func generatePeerAddrs(h host.Host) []string {
+	addrs := make([]string, 0, len(h.Addrs()))
+	for _, addr := range h.Addrs() {
+		fullAddr := fmt.Sprintf("%s/p2p/%s", addr.String(), h.ID().String())
+		addrs = append(addrs, fullAddr)
+	}
+	return addrs
 }
 
 // Start starts the DHT server and returns the primary peer address
@@ -348,100 +354,81 @@ func (s *Server) handlePeerDisconnected(_ network.Network, conn network.Conn) {
 
 // discoverWorkersPeriodically periodically discovers workers advertising the namespace
 func (s *Server) discoverWorkersPeriodically() {
-	// Start the peer manager
 	s.peerManager.Start()
-
-	// Use shorter interval for testing environments
 	discoveryInterval := 10 * time.Second
 	if os.Getenv("CROWDLLAMA_TEST_MODE") == "1" {
 		discoveryInterval = 2 * time.Second
 	}
-
 	ticker := time.NewTicker(discoveryInterval)
 	defer ticker.Stop()
-
-	// Log NAT status every 30 seconds (or 10 seconds in test mode)
 	natLogInterval := 30 * time.Second
 	if os.Getenv("CROWDLLAMA_TEST_MODE") == "1" {
 		natLogInterval = 10 * time.Second
 	}
 	natTicker := time.NewTicker(natLogInterval)
 	defer natTicker.Stop()
-
 	namespaceCID := s.getWorkerNamespaceCID()
 	s.logger.Info("Starting periodic worker discovery",
 		zap.String("namespace_cid", namespaceCID.String()),
 		zap.Duration("interval", discoveryInterval))
-
 	for {
 		select {
 		case <-ticker.C:
-			s.logger.Debug("Searching for workers advertising namespace",
-				zap.String("namespace_cid", namespaceCID.String()))
-
-			providers := s.DHT.FindProvidersAsync(context.Background(), namespaceCID, 10)
-			workerCount := 0
-
-			for provider := range providers {
-				workerPeerID := provider.ID.String()
-
-				// Check if this worker is already marked as unhealthy in the peer manager
-				if s.peerManager.IsPeerUnhealthy(workerPeerID) {
-					s.logger.Debug("Skipping unhealthy worker",
-						zap.String("worker_peer_id", workerPeerID))
-					continue
-				}
-
-				workerCount++
-				s.logger.Info("Found worker",
-					zap.String("worker_peer_id", workerPeerID),
-					zap.Strings("addresses", s.multiaddrsToStrings(provider.Addrs)))
-
-				// Request metadata from the worker
-				metadata, err := s.requestWorkerMetadata(context.Background(), provider.ID)
-				if err != nil {
-					s.logger.Error("Failed to get metadata from worker",
-						zap.String("worker_peer_id", workerPeerID),
-						zap.Error(err))
-					// Don't add to peer manager if metadata request fails
-					continue
-				}
-
-				// Validate metadata using peer manager
-				if err := s.peerManager.ValidateMetadata(metadata); err != nil {
-					s.logger.Warn("Metadata validation failed, skipping worker",
-						zap.String("worker_peer_id", provider.ID.String()),
-						zap.Error(err))
-					continue
-				}
-
-				// Add or update worker in peer manager
-				s.peerManager.AddOrUpdatePeer(provider.ID.String(), metadata)
-
-				s.logger.Info("Worker metadata retrieved successfully",
-					zap.String("worker_peer_id", provider.ID.String()),
-					zap.String("gpu_model", metadata.GPUModel),
-					zap.Int("vram_gb", metadata.VRAMGB),
-					zap.Float64("tokens_throughput", metadata.TokensThroughput),
-					zap.Float64("current_load", metadata.Load),
-					zap.Strings("supported_models", metadata.SupportedModels),
-					zap.Time("last_updated", metadata.LastUpdated))
-			}
-
-			if workerCount == 0 {
-				s.logger.Debug("No workers found advertising namespace",
-					zap.String("namespace_cid", namespaceCID.String()))
-			} else {
-				s.logger.Info("Worker discovery completed",
-					zap.String("namespace_cid", namespaceCID.String()),
-					zap.Int("total_workers_found", workerCount))
-			}
+			s.handleWorkerDiscovery(namespaceCID)
 		case <-natTicker.C:
-			// Log NAT traversal statistics periodically
 			s.LogNATStatus()
 		case <-s.ctx.Done():
 			return
 		}
+	}
+}
+
+func (s *Server) handleWorkerDiscovery(namespaceCID cid.Cid) {
+	s.logger.Debug("Searching for workers advertising namespace",
+		zap.String("namespace_cid", namespaceCID.String()))
+	providers := s.DHT.FindProvidersAsync(context.Background(), namespaceCID, 10)
+	workerCount := 0
+	for provider := range providers {
+		workerPeerID := provider.ID.String()
+		if s.peerManager.IsPeerUnhealthy(workerPeerID) {
+			s.logger.Debug("Skipping unhealthy worker",
+				zap.String("worker_peer_id", workerPeerID))
+			continue
+		}
+		workerCount++
+		s.logger.Info("Found worker",
+			zap.String("worker_peer_id", workerPeerID),
+			zap.Strings("addresses", s.multiaddrsToStrings(provider.Addrs)))
+		metadata, err := s.requestWorkerMetadata(context.Background(), provider.ID)
+		if err != nil {
+			s.logger.Error("Failed to get metadata from worker",
+				zap.String("worker_peer_id", workerPeerID),
+				zap.Error(err))
+			continue
+		}
+		if err := s.peerManager.ValidateMetadata(metadata); err != nil {
+			s.logger.Warn("Metadata validation failed, skipping worker",
+				zap.String("worker_peer_id", provider.ID.String()),
+				zap.Error(err))
+			continue
+		}
+		s.peerManager.AddOrUpdatePeer(provider.ID.String(), metadata)
+		s.logger.Info("Worker metadata retrieved successfully",
+			zap.String("worker_peer_id", provider.ID.String()),
+			zap.String("gpu_model", metadata.GPUModel),
+			zap.Int("vram_gb", metadata.VRAMGB),
+			zap.Float64("tokens_throughput", metadata.TokensThroughput),
+			zap.Float64("current_load", metadata.Load),
+			zap.Strings("supported_models", metadata.SupportedModels),
+			zap.Time("last_updated", metadata.LastUpdated))
+	}
+	if workerCount == 0 {
+		s.logger.Debug("No workers found advertising namespace",
+			zap.String("namespace_cid", namespaceCID.String()))
+	} else {
+		s.logger.Info("Worker discovery completed",
+			zap.String("namespace_cid", namespaceCID.String()),
+			zap.Int("total_workers_found", workerCount))
 	}
 }
 

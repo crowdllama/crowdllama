@@ -510,7 +510,7 @@ func (c *Consumer) StartBackgroundDiscovery() {
 	go func() {
 		// Use shorter interval for testing environments
 		discoveryInterval := DiscoveryInterval
-		if os.Getenv("CROW DLLAMA_TEST_MODE") == "1" {
+		if os.Getenv("CROWDLLAMA_TEST_MODE") == "1" {
 			discoveryInterval = 2 * time.Second
 		}
 
@@ -555,7 +555,7 @@ func (c *Consumer) runDiscovery() {
 		}
 
 		// Additional check: skip workers with old metadata
-		if time.Since(worker.LastUpdated) > 1*time.Hour {
+		if time.Since(worker.LastUpdated) > c.peerManager.GetConfig().MaxMetadataAge {
 			c.logger.Debug("Skipping worker with old metadata",
 				zap.String("worker_peer_id", worker.PeerID),
 				zap.Time("last_updated", worker.LastUpdated))
