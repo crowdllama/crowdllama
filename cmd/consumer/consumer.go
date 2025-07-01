@@ -77,7 +77,7 @@ func runConsumer() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	c, err := consumer.NewConsumer(ctx, logger, privKey)
+	c, err := consumer.NewConsumer(ctx, logger, privKey, cfg)
 	if err != nil {
 		return fmt.Errorf("failed to initialize consumer: %w", err)
 	}

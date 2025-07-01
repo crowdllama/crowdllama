@@ -65,7 +65,7 @@ func runWorker() error {
 	if cfg.IsVerbose() {
 		logger.Info("Verbose mode enabled")
 	}
-	logger.Info("Starting crowdllama worker", zap.String("ollama_url", cfg.GetOllamaURL()))
+	logger.Info("Starting crowdllama worker", zap.String("ollama_url", cfg.GetOllamaBaseURL()))
 
 	privKey, err := getWorkerPrivateKey(cfg, logger)
 	if err != nil {
@@ -75,7 +75,7 @@ func runWorker() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	w, err := worker.NewWorkerWithBootstrapPeersAndOllamaURL(ctx, privKey, nil, cfg.GetOllamaURL())
+	w, err := worker.NewWorkerWithConfig(ctx, privKey, cfg)
 	if err != nil {
 		return fmt.Errorf("failed to start worker: %w", err)
 	}
