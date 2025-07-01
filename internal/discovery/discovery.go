@@ -42,7 +42,6 @@ var defaultListenAddrs = []string{"/ip4/0.0.0.0/tcp/0"}
 const (
 	// defaultBootstrapPeerAddr is the default bootstrap peer address for the DHT:
 	// TODO: allow CLI to pass custom peers
-	// defaultBootstrapPeerAddr = "/ip4/192.168.0.17/tcp/9000/p2p/12D3KooWJzvh2T7Htr1Dr86batqcAf4c5wB8D16zfkM2xJFpoahy"
 	defaultBootstrapPeerAddr = "/dns4/dht.crowdllama.ai/tcp/9000/p2p/12D3KooWGDXKRromTN8jFpxzBqFKoxVzD3feaBpKBnj9YCLbakpw"
 	// hardcoded dns bootstrap dht:
 	// defaultBootstrapPeerAddr = "/dns4/dht.crowdllama.com/tcp/9000/p2p/12D3KooWJB3rAu12osvuqJDo2ncCN8VqQmVkecwgDxxu1AN7fmeR"
@@ -50,10 +49,31 @@ const (
 
 // NewHostAndDHT creates a libp2p host with DHT
 func NewHostAndDHT(ctx context.Context, privKey crypto.PrivKey) (host.Host, *dht.IpfsDHT, error) {
-	h, err := libp2p.New(
+	libp2pOpts := []libp2p.Option{
 		libp2p.ListenAddrStrings(defaultListenAddrs...),
 		libp2p.Identity(privKey),
-	)
+	}
+	if os.Getenv("CROWDLLAMA_TEST_MODE") != "1" {
+		// Use static relays for auto-relay functionality
+		staticRelays := []peer.AddrInfo{
+			// Add some well-known libp2p relays here
+			// For now, we'll disable auto-relay to avoid the error
+			// TODO: Add proper static relays when needed
+		}
+
+		libp2pOpts = append(libp2pOpts,
+			libp2p.EnableHolePunching(),
+		)
+
+		// Only enable auto-relay if we have static relays
+		if len(staticRelays) > 0 {
+			libp2pOpts = append(libp2pOpts,
+				libp2p.EnableAutoRelayWithStaticRelays(staticRelays),
+			)
+		}
+	}
+
+	h, err := libp2p.New(libp2pOpts...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create libp2p host: %w", err)
 	}
@@ -275,7 +295,9 @@ func DiscoverWorkers(ctx context.Context, kadDHT *dht.IpfsDHT, logger *zap.Logge
 	// Find providers for the namespace CID
 	providers := kadDHT.FindProvidersAsync(ctx, namespaceCID, 10)
 
+	providerCount := 0
 	for provider := range providers {
+		providerCount++
 		logger.Info("Found worker provider", zap.String("peer_id", provider.ID.String()))
 
 		// Give the worker a moment to set up handlers
@@ -287,6 +309,14 @@ func DiscoverWorkers(ctx context.Context, kadDHT *dht.IpfsDHT, logger *zap.Logge
 			logger.Warn("Failed to get metadata from worker",
 				zap.String("peer_id", provider.ID.String()),
 				zap.Error(err))
+
+			// Create a placeholder worker with just the peer ID to track this worker
+			// The peer manager will handle marking it as unhealthy
+			placeholderWorker := &crowdllama.Resource{
+				PeerID:      provider.ID.String(),
+				LastUpdated: time.Now().Add(-2 * time.Hour), // Mark as old so it gets cleaned up
+			}
+			workers = append(workers, placeholderWorker)
 			continue
 		}
 
@@ -304,6 +334,10 @@ func DiscoverWorkers(ctx context.Context, kadDHT *dht.IpfsDHT, logger *zap.Logge
 			zap.String("gpu_model", metadata.GPUModel),
 			zap.Strings("supported_models", metadata.SupportedModels))
 	}
+
+	logger.Info("Discovery complete",
+		zap.Int("providers_found", providerCount),
+		zap.Int("workers_with_metadata", len(workers)))
 
 	return workers, nil
 }

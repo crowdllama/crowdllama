@@ -45,7 +45,7 @@ func TestWorkerDHTIntegration(t *testing.T) {
 	}
 
 	// Set test mode environment variable for shorter intervals
-	if err := os.Setenv("CROW DLLAMA_TEST_MODE", "1"); err != nil {
+	if err := os.Setenv("CROWDLLAMA_TEST_MODE", "1"); err != nil {
 		t.Logf("Failed to set test mode environment variable: %v", err)
 	}
 

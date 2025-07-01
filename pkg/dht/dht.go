@@ -19,6 +19,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matiasinsaurralde/crowdllama/internal/discovery"
+	"github.com/matiasinsaurralde/crowdllama/internal/peermanager"
 	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
 )
 
@@ -28,14 +29,15 @@ var DefaultListenAddrs = []string{
 	"/ip4/0.0.0.0/udp/9000/quic-v1",
 }
 
-// Server represents a DHT server instance
+// Server represents a DHT server node
 type Server struct {
-	Host      host.Host
-	DHT       *dht.IpfsDHT
-	logger    *zap.Logger
-	ctx       context.Context
-	cancel    context.CancelFunc
-	peerAddrs []string
+	Host        host.Host
+	DHT         *dht.IpfsDHT
+	logger      *zap.Logger
+	ctx         context.Context
+	cancel      context.CancelFunc
+	peerManager *peermanager.Manager
+	peerAddrs   []string
 }
 
 // NewDHTServer creates a new DHT server instance
@@ -45,58 +47,85 @@ func NewDHTServer(ctx context.Context, privKey crypto.PrivKey, logger *zap.Logge
 
 // NewDHTServerWithAddrs creates a new DHT server instance with custom listen addresses
 func NewDHTServerWithAddrs(ctx context.Context, privKey crypto.PrivKey, logger *zap.Logger, listenAddrs []string) (*Server, error) {
-	// If no listen addresses provided, fallback to defaults
-	if len(listenAddrs) == 0 {
-		listenAddrs = DefaultListenAddrs
-		logger.Debug("No listen addresses provided, using defaults", zap.Strings("default_addrs", DefaultListenAddrs))
+	ctx, cancel := context.WithCancel(ctx)
+
+	libp2pOpts := []libp2p.Option{
+		libp2p.Identity(privKey),
+		libp2p.ListenAddrStrings(listenAddrs...),
+		libp2p.NATPortMap(),
+	}
+	if os.Getenv("CROWDLLAMA_TEST_MODE") != "1" {
+		// Use static relays for auto-relay functionality
+		staticRelays := []peer.AddrInfo{
+			// Add some well-known libp2p relays here
+			// For now, we'll disable auto-relay to avoid the error
+			// TODO: Add proper static relays when needed
+		}
+
+		libp2pOpts = append(libp2pOpts,
+			libp2p.EnableHolePunching(),
+		)
+
+		// Only enable auto-relay if we have static relays
+		if len(staticRelays) > 0 {
+			libp2pOpts = append(libp2pOpts,
+				libp2p.EnableAutoRelayWithStaticRelays(staticRelays),
+			)
+		}
 	}
 
-	logger.Debug("Creating libp2p host with identity",
-		zap.Strings("listen_addrs", listenAddrs))
-
-	h, err := libp2p.New(
-		libp2p.ListenAddrStrings(listenAddrs...),
-		libp2p.Identity(privKey),
-	)
+	h, err := libp2p.New(libp2pOpts...)
 	if err != nil {
-		logger.Error("Failed to create libp2p host", zap.Error(err))
+		cancel()
 		return nil, fmt.Errorf("create libp2p host: %w", err)
 	}
 
-	logger.Debug("Creating DHT instance", zap.String("mode", "server"))
+	// Create DHT
 	kadDHT, err := dht.New(ctx, h, dht.Mode(dht.ModeServer))
 	if err != nil {
-		logger.Error("Failed to create DHT instance", zap.Error(err))
-		return nil, fmt.Errorf("create DHT instance: %w", err)
+		cancel()
+		return nil, fmt.Errorf("create DHT: %w", err)
+	}
+
+	// Initialize peer manager with test configuration if in test mode
+	peerConfig := peermanager.DefaultConfig()
+	if os.Getenv("CROWDLLAMA_TEST_MODE") == "1" {
+		peerConfig = &peermanager.Config{
+			StalePeerTimeout:    30 * time.Second, // Shorter for testing
+			HealthCheckInterval: 5 * time.Second,
+			MaxFailedAttempts:   2,
+			BackoffBase:         5 * time.Second,
+			MetadataTimeout:     2 * time.Second,
+			MaxMetadataAge:      30 * time.Second,
+		}
+	}
+
+	server := &Server{
+		Host:        h,
+		DHT:         kadDHT,
+		logger:      logger,
+		ctx:         ctx,
+		cancel:      cancel,
+		peerManager: peermanager.NewManager(ctx, h, logger, peerConfig),
 	}
 
 	// Generate peer addresses in the required format
-	peerAddrs := make([]string, 0, len(h.Addrs()))
+	server.peerAddrs = make([]string, 0, len(h.Addrs()))
 	for _, addr := range h.Addrs() {
 		fullAddr := fmt.Sprintf("%s/p2p/%s", addr.String(), h.ID().String())
-		peerAddrs = append(peerAddrs, fullAddr)
+		server.peerAddrs = append(server.peerAddrs, fullAddr)
 	}
 
 	// Ensure we have at least one peer address
-	if len(peerAddrs) == 0 {
+	if len(server.peerAddrs) == 0 {
 		logger.Warn("No peer addresses generated, this may indicate a configuration issue")
 	}
 
-	serverCtx, cancel := context.WithCancel(ctx)
-
-	server := &Server{
-		Host:      h,
-		DHT:       kadDHT,
-		logger:    logger,
-		ctx:       serverCtx,
-		cancel:    cancel,
-		peerAddrs: peerAddrs,
-	}
-
-	logger.Info("DHT server created successfully",
-		zap.String("peer_id", h.ID().String()),
-		zap.String("dht_mode", "server"),
-		zap.Strings("peer_addrs", peerAddrs))
+	// Set up connection handlers
+	h.Network().Notify(&network.NotifyBundle{
+		ConnectedF:    server.handlePeerConnected,
+		DisconnectedF: server.handlePeerDisconnected,
+	})
 
 	return server, nil
 }
@@ -117,14 +146,14 @@ func (s *Server) Start() (string, error) {
 				zap.String("direction", direction),
 				zap.String("transport", conn.RemoteMultiaddr().Protocols()[0].Name),
 				zap.Bool("is_relay", isRelayConnection(remoteAddr)),
-				zap.Bool("is_hole_punched", isHolePunchedConnection(remoteAddr, direction)))
+				zap.Bool("is_hole_punched", s.isHolePunchedConnection(remoteAddr, direction)))
 
 			// Log NAT traversal information
 			if isRelayConnection(remoteAddr) {
 				s.logger.Debug("Connection established via relay (NAT traversal)",
 					zap.String("peer_id", peerID),
 					zap.String("relay_addr", remoteAddr))
-			} else if isHolePunchedConnection(remoteAddr, direction) {
+			} else if s.isHolePunchedConnection(remoteAddr, direction) {
 				s.logger.Debug("Direct connection established (hole punching successful)",
 					zap.String("peer_id", peerID),
 					zap.String("direct_addr", remoteAddr))
@@ -217,6 +246,22 @@ func (s *Server) GetConnectedPeersCount() int {
 	return len(s.Host.Network().Peers())
 }
 
+// GetHealthyPeers returns the peer manager's healthy peers
+func (s *Server) GetHealthyPeers() map[string]*peermanager.PeerInfo {
+	return s.peerManager.GetHealthyPeers()
+}
+
+// CheckProvider checks if a specific peer is providing a specific CID
+func (s *Server) CheckProvider(ctx context.Context, peerID peer.ID, c cid.Cid) bool {
+	providers := s.DHT.FindProvidersAsync(ctx, c, 10)
+	for provider := range providers {
+		if provider.ID == peerID {
+			return true
+		}
+	}
+	return false
+}
+
 // GetNATStatus returns information about NAT traversal and connection types
 func (s *Server) GetNATStatus() map[string]interface{} {
 	connections := s.Host.Network().Conns()
@@ -236,7 +281,7 @@ func (s *Server) GetNATStatus() map[string]interface{} {
 
 		if isRelayConnection(addr) {
 			stats["relay_connections"] = stats["relay_connections"].(int) + 1
-		} else if isHolePunchedConnection(addr, direction) {
+		} else if s.isHolePunchedConnection(addr, direction) {
 			stats["hole_punched_connections"] = stats["hole_punched_connections"].(int) + 1
 			stats["external_connections"] = stats["external_connections"].(int) + 1
 		} else if isExternalIP(addr) {
@@ -262,22 +307,56 @@ func (s *Server) LogNATStatus() {
 		zap.Int("external_connections", stats["external_connections"].(int)))
 }
 
+// handlePeerConnected handles when a peer connects
+func (s *Server) handlePeerConnected(_ network.Network, conn network.Conn) {
+	peerID := conn.RemotePeer().String()
+	remoteAddr := conn.RemoteMultiaddr().String()
+	direction := conn.Stat().Direction.String()
+	transport := conn.RemoteMultiaddr().Protocols()[0].Name
+
+	s.logger.Debug("New peer connected",
+		zap.String("peer_id", peerID),
+		zap.String("remote_addr", remoteAddr),
+		zap.String("direction", direction),
+		zap.String("transport", transport),
+		zap.Bool("is_relay", strings.Contains(remoteAddr, "/p2p-circuit/")),
+		zap.Bool("is_hole_punched", s.isHolePunchedConnection(remoteAddr, direction)))
+
+	// Check if this is a direct connection (not relay)
+	if !strings.Contains(remoteAddr, "/p2p-circuit/") {
+		s.logger.Debug("Direct connection established (no NAT)",
+			zap.String("peer_id", peerID),
+			zap.String("direct_addr", remoteAddr))
+	}
+}
+
+// handlePeerDisconnected handles when a peer disconnects
+func (s *Server) handlePeerDisconnected(_ network.Network, conn network.Conn) {
+	peerID := conn.RemotePeer().String()
+	remoteAddr := conn.RemoteMultiaddr().String()
+
+	s.logger.Info("Peer disconnected",
+		zap.String("peer_id", peerID),
+		zap.String("remote_addr", remoteAddr))
+}
+
 // discoverWorkersPeriodically periodically discovers workers advertising the namespace
-//
-//nolint:funlen // This function handles multiple periodic tasks and is appropriately long
 func (s *Server) discoverWorkersPeriodically() {
+	// Start the peer manager
+	s.peerManager.Start()
+
 	// Use shorter interval for testing environments
 	discoveryInterval := 10 * time.Second
-	if os.Getenv("CROW DLLAMA_TEST_MODE") == "1" {
+	if os.Getenv("CROWDLLAMA_TEST_MODE") == "1" {
 		discoveryInterval = 2 * time.Second
 	}
 
-	ticker := time.NewTicker(discoveryInterval) // Run every 2 seconds for testing
+	ticker := time.NewTicker(discoveryInterval)
 	defer ticker.Stop()
 
 	// Log NAT status every 30 seconds (or 10 seconds in test mode)
 	natLogInterval := 30 * time.Second
-	if os.Getenv("CROW DLLAMA_TEST_MODE") == "1" {
+	if os.Getenv("CROWDLLAMA_TEST_MODE") == "1" {
 		natLogInterval = 10 * time.Second
 	}
 	natTicker := time.NewTicker(natLogInterval)
@@ -309,16 +388,29 @@ func (s *Server) discoverWorkersPeriodically() {
 					s.logger.Error("Failed to get metadata from worker",
 						zap.String("worker_peer_id", provider.ID.String()),
 						zap.Error(err))
-				} else {
-					s.logger.Info("Worker metadata retrieved successfully",
-						zap.String("worker_peer_id", provider.ID.String()),
-						zap.String("gpu_model", metadata.GPUModel),
-						zap.Int("vram_gb", metadata.VRAMGB),
-						zap.Float64("tokens_throughput", metadata.TokensThroughput),
-						zap.Float64("current_load", metadata.Load),
-						zap.Strings("supported_models", metadata.SupportedModels),
-						zap.Time("last_updated", metadata.LastUpdated))
+					// Don't add to peer manager if metadata request fails
+					continue
 				}
+
+				// Validate metadata using peer manager
+				if err := s.peerManager.ValidateMetadata(metadata); err != nil {
+					s.logger.Warn("Metadata validation failed, skipping worker",
+						zap.String("worker_peer_id", provider.ID.String()),
+						zap.Error(err))
+					continue
+				}
+
+				// Add or update worker in peer manager
+				s.peerManager.AddOrUpdatePeer(provider.ID.String(), metadata)
+
+				s.logger.Info("Worker metadata retrieved successfully",
+					zap.String("worker_peer_id", provider.ID.String()),
+					zap.String("gpu_model", metadata.GPUModel),
+					zap.Int("vram_gb", metadata.VRAMGB),
+					zap.Float64("tokens_throughput", metadata.TokensThroughput),
+					zap.Float64("current_load", metadata.Load),
+					zap.Strings("supported_models", metadata.SupportedModels),
+					zap.Time("last_updated", metadata.LastUpdated))
 			}
 
 			if workerCount == 0 {
@@ -370,24 +462,11 @@ func isRelayConnection(addr string) bool {
 	return strings.Contains(addr, "/p2p-circuit/")
 }
 
-// isHolePunchedConnection checks if a connection is likely hole punched
-func isHolePunchedConnection(addr, direction string) bool {
-	// Hole punched connections are typically:
-	// 1. Inbound connections (other peer initiated)
-	// 2. Not relay connections
-	// 3. From external IP addresses (not localhost/private ranges)
-
-	if isRelayConnection(addr) {
-		return false
-	}
-
-	// Check if it's an inbound connection
-	if direction != "Inbound" {
-		return false
-	}
-
-	// Check if it's from an external IP (not localhost or private range)
-	return isExternalIP(addr)
+// isHolePunchedConnection determines if a connection was established through hole punching
+func (s *Server) isHolePunchedConnection(remoteAddr, direction string) bool {
+	// This is a simplified heuristic - in a real implementation you might track
+	// connection establishment events more precisely
+	return direction == "Outbound" && !strings.Contains(remoteAddr, "/p2p-circuit/")
 }
 
 // isExternalIP checks if an address is from an external IP

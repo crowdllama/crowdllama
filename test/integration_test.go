@@ -22,6 +22,7 @@ import (
 	"github.com/matiasinsaurralde/crowdllama/internal/keys"
 	"github.com/matiasinsaurralde/crowdllama/pkg/config"
 	"github.com/matiasinsaurralde/crowdllama/pkg/consumer"
+	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
 	"github.com/matiasinsaurralde/crowdllama/pkg/dht"
 	"github.com/matiasinsaurralde/crowdllama/pkg/worker"
 )
@@ -165,7 +166,7 @@ func TestFullIntegration(t *testing.T) {
 	}
 
 	// Set test mode environment variable for shorter intervals
-	if err := os.Setenv("CROW DLLAMA_TEST_MODE", "1"); err != nil {
+	if err := os.Setenv("CROWDLLAMA_TEST_MODE", "1"); err != nil {
 		t.Logf("Failed to set test mode environment variable: %v", err)
 	}
 
@@ -287,6 +288,15 @@ func stepStartDHTServerFull(t *testing.T, dhtServer *dht.Server) string {
 		t.Logf("🔍 CI Debug: DHT server all addresses: %v", dhtServer.GetPeerAddrs())
 	}
 
+	// Start DHT server
+	_, err := dhtServer.Start()
+	if err != nil {
+		t.Fatalf("Failed to start DHT server: %v", err)
+	}
+
+	// Give DHT server time to fully bootstrap
+	time.Sleep(3 * time.Second)
+
 	dhtPeerAddr, err := dhtServer.Start()
 	if err != nil {
 		t.Fatalf("Failed to start DHT server: %v", err)
@@ -351,7 +361,7 @@ func stepSetupWorkerMetadataFull(t *testing.T, workerInstance *worker.Worker) {
 
 func stepAdvertiseWorkerFull(ctx context.Context, t *testing.T, workerInstance *worker.Worker) {
 	t.Helper()
-	workerInstance.AdvertiseModel(ctx, "tinyllama")
+	workerInstance.AdvertiseModel(ctx, crowdllama.WorkerNamespace)
 }
 
 func stepInitConsumerFull(
@@ -703,4 +713,452 @@ func stepShutdownMockOllamaServer(t *testing.T, mockOllama *MockOllamaServer) {
 	if stopErr := mockOllama.Stop(shutdownCtx); stopErr != nil {
 		t.Logf("Failed to stop mock Ollama server: %v", stopErr)
 	}
+}
+
+// TestStalePeerRemovalIntegration tests that stale peers are properly removed
+// from both consumer and DHT components using the shared peermanager
+func TestStalePeerRemovalIntegration(t *testing.T) {
+	// Set test mode for faster timeouts
+	if err := os.Setenv("CROWDLLAMA_TEST_MODE", "1"); err != nil {
+		t.Fatalf("Failed to set test mode: %v", err)
+	}
+	defer func() {
+		if err := os.Unsetenv("CROWDLLAMA_TEST_MODE"); err != nil {
+			t.Logf("Failed to unset test mode: %v", err)
+		}
+	}()
+
+	logger := zap.NewNop()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	// Create test configuration
+	cfg := &config.Configuration{
+		BootstrapPeers: []string{},
+	}
+
+	// Generate keys for different components
+	consumerKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
+	if err != nil {
+		t.Fatalf("Failed to generate consumer key: %v", err)
+	}
+
+	dhtKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
+	if err != nil {
+		t.Fatalf("Failed to generate DHT key: %v", err)
+	}
+
+	workerKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
+	if err != nil {
+		t.Fatalf("Failed to generate worker key: %v", err)
+	}
+
+	// Create DHT server
+	dhtServer, err := dht.NewDHTServerWithAddrs(ctx, dhtKey, logger, []string{"/ip4/127.0.0.1/tcp/0"})
+	if err != nil {
+		t.Fatalf("Failed to create DHT server: %v", err)
+	}
+	defer dhtServer.Stop()
+
+	// Start DHT server
+	_, err = dhtServer.Start()
+	if err != nil {
+		t.Fatalf("Failed to start DHT server: %v", err)
+	}
+
+	// Give DHT server time to fully bootstrap
+	time.Sleep(3 * time.Second)
+
+	// Get DHT server addresses for bootstrap
+	dhtAddrs := dhtServer.GetPeerAddrs()
+	if len(dhtAddrs) == 0 {
+		t.Fatal("DHT server has no addresses")
+	}
+
+	// Update config with DHT server addresses
+	cfg.BootstrapPeers = dhtAddrs
+
+	// Create consumer
+	consumer, err := consumer.NewConsumerWithConfig(ctx, logger, consumerKey, cfg)
+	if err != nil {
+		t.Fatalf("Failed to create consumer: %v", err)
+	}
+	defer consumer.StopBackgroundDiscovery()
+
+	// Create worker
+	worker, err := worker.NewWorkerWithConfig(ctx, workerKey, cfg)
+	if err != nil {
+		t.Fatalf("Failed to create worker: %v", err)
+	}
+	defer worker.StopMetadataUpdates()
+
+	// Start all components
+	worker.StartMetadataUpdates()
+	worker.SetupMetadataHandler()
+	worker.AdvertiseModel(ctx, crowdllama.WorkerNamespace)
+
+	// Give the worker time to start advertising
+	time.Sleep(2 * time.Second)
+
+	// Now start consumer discovery after worker has started advertising
+	consumer.StartBackgroundDiscovery()
+
+	// Wait for initial discovery
+	time.Sleep(5 * time.Second)
+
+	// Verify worker is discovered by consumer
+	initialWorkers := consumer.GetAvailableWorkers()
+	if len(initialWorkers) == 0 {
+		t.Fatal("No workers discovered initially")
+	}
+
+	workerPeerID := worker.Host.ID().String()
+	if _, exists := initialWorkers[workerPeerID]; !exists {
+		t.Fatalf("Worker %s not found in consumer's worker list", workerPeerID)
+	}
+
+	t.Logf("Initial discovery successful: found %d workers", len(initialWorkers))
+
+	// Verify worker is connected to DHT
+	dhtPeers := dhtServer.GetPeers()
+	workerFoundInDHT := false
+	for _, peerID := range dhtPeers {
+		if peerID == workerPeerID {
+			workerFoundInDHT = true
+			break
+		}
+	}
+
+	if !workerFoundInDHT {
+		t.Fatalf("Worker %s not found in DHT's peer list", workerPeerID)
+	}
+
+	t.Logf("DHT connection successful: found %d peers", len(dhtPeers))
+
+	// Stop the worker to simulate it going offline
+	t.Log("Stopping worker to simulate offline behavior...")
+	worker.StopMetadataUpdates()
+
+	// Wait for stale peer timeout (30 seconds in test mode)
+	t.Log("Waiting for stale peer timeout...")
+	time.Sleep(35 * time.Second)
+
+	// Verify worker is removed from consumer
+	remainingWorkers := consumer.GetAvailableWorkers()
+	if len(remainingWorkers) > 0 {
+		t.Errorf("Expected no workers after timeout, but found %d", len(remainingWorkers))
+		for peerID := range remainingWorkers {
+			t.Errorf("Unexpected worker still present: %s", peerID)
+		}
+	}
+
+	// Verify worker is removed from DHT
+	remainingDHTPeers := dhtServer.GetHealthyPeers()
+	workerStillInDHT := false
+	for peerID := range remainingDHTPeers {
+		if peerID == workerPeerID {
+			workerStillInDHT = true
+			break
+		}
+	}
+
+	if workerStillInDHT {
+		t.Errorf("Worker %s still present in DHT healthy peers after timeout", workerPeerID)
+	}
+
+	// Check health status to verify cleanup
+	healthStatus := consumer.GetWorkerHealthStatus()
+	if len(healthStatus) > 0 {
+		t.Errorf("Expected no health status entries after cleanup, but found %d", len(healthStatus))
+	}
+
+	t.Log("Stale peer removal test completed successfully")
+}
+
+// TestPeerManagerHealthChecks tests that health checks work correctly
+func TestPeerManagerHealthChecks(t *testing.T) {
+	// Set test mode for faster timeouts
+	if err := os.Setenv("CROWDLLAMA_TEST_MODE", "1"); err != nil {
+		t.Fatalf("Failed to set test mode: %v", err)
+	}
+	defer func() {
+		if err := os.Unsetenv("CROWDLLAMA_TEST_MODE"); err != nil {
+			t.Logf("Failed to unset test mode: %v", err)
+		}
+	}()
+
+	logger := zap.NewNop()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	// Create test configuration
+	cfg := &config.Configuration{
+		BootstrapPeers: []string{},
+	}
+
+	// Generate keys
+	consumerKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
+	if err != nil {
+		t.Fatalf("Failed to generate consumer key: %v", err)
+	}
+
+	workerKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
+	if err != nil {
+		t.Fatalf("Failed to generate worker key: %v", err)
+	}
+
+	// Create consumer and worker
+	consumer, err := consumer.NewConsumerWithConfig(ctx, logger, consumerKey, cfg)
+	if err != nil {
+		t.Fatalf("Failed to create consumer: %v", err)
+	}
+	defer consumer.StopBackgroundDiscovery()
+
+	worker, err := worker.NewWorkerWithConfig(ctx, workerKey, cfg)
+	if err != nil {
+		t.Fatalf("Failed to create worker: %v", err)
+	}
+	defer worker.StopMetadataUpdates()
+
+	// Start discovery
+	consumer.StartBackgroundDiscovery()
+	worker.StartMetadataUpdates()
+	worker.AdvertiseModel(ctx, crowdllama.WorkerNamespace)
+
+	// Wait for discovery
+	time.Sleep(5 * time.Second)
+
+	// Verify initial health status
+	healthStatus := consumer.GetWorkerHealthStatus()
+	workerPeerID := worker.Host.ID().String()
+
+	if len(healthStatus) == 0 {
+		t.Fatal("No health status entries found")
+	}
+
+	workerHealth, exists := healthStatus[workerPeerID]
+	if !exists {
+		t.Fatalf("Worker %s not found in health status", workerPeerID)
+	}
+
+	if !workerHealth["is_healthy"].(bool) {
+		t.Error("Worker should be healthy initially")
+	}
+
+	t.Logf("Initial health check passed: worker %s is healthy", workerPeerID)
+
+	// Simulate worker becoming unhealthy by stopping it
+	worker.StopMetadataUpdates()
+
+	// Wait for health check to detect the issue
+	time.Sleep(10 * time.Second)
+
+	// Check health status again
+	updatedHealthStatus := consumer.GetWorkerHealthStatus()
+	updatedWorkerHealth, exists := updatedHealthStatus[workerPeerID]
+	if !exists {
+		t.Fatal("Worker should still be in health status even if unhealthy")
+	}
+
+	if updatedWorkerHealth["is_healthy"].(bool) {
+		t.Error("Worker should be marked as unhealthy after stopping")
+	}
+
+	failedAttempts := updatedWorkerHealth["failed_attempts"].(int)
+	if failedAttempts == 0 {
+		t.Error("Failed attempts should be greater than 0 for unhealthy worker")
+	}
+
+	t.Logf("Health check correctly detected unhealthy worker: failed_attempts=%d", failedAttempts)
+
+	// Wait for worker to be removed due to repeated failures
+	time.Sleep(20 * time.Second)
+
+	finalHealthStatus := consumer.GetWorkerHealthStatus()
+	if len(finalHealthStatus) > 0 {
+		t.Errorf("Expected no health status entries after removal, but found %d", len(finalHealthStatus))
+	}
+
+	t.Log("Health check and cleanup test completed successfully")
+}
+
+// TestMetadataValidation tests that metadata validation works correctly
+func TestMetadataValidation(t *testing.T) {
+	// Set test mode
+	if err := os.Setenv("CROWDLLAMA_TEST_MODE", "1"); err != nil {
+		t.Fatalf("Failed to set test mode: %v", err)
+	}
+	defer func() {
+		if err := os.Unsetenv("CROWDLLAMA_TEST_MODE"); err != nil {
+			t.Logf("Failed to unset test mode: %v", err)
+		}
+	}()
+
+	logger := zap.NewNop()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Create test configuration
+	cfg := &config.Configuration{
+		BootstrapPeers: []string{},
+	}
+
+	// Generate keys
+	consumerKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
+	if err != nil {
+		t.Fatalf("Failed to generate consumer key: %v", err)
+	}
+
+	workerKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
+	if err != nil {
+		t.Fatalf("Failed to generate worker key: %v", err)
+	}
+
+	// Create consumer and worker
+	consumer, err := consumer.NewConsumerWithConfig(ctx, logger, consumerKey, cfg)
+	if err != nil {
+		t.Fatalf("Failed to create consumer: %v", err)
+	}
+	defer consumer.StopBackgroundDiscovery()
+
+	worker, err := worker.NewWorkerWithConfig(ctx, workerKey, cfg)
+	if err != nil {
+		t.Fatalf("Failed to create worker: %v", err)
+	}
+	defer worker.StopMetadataUpdates()
+
+	// Start discovery
+	consumer.StartBackgroundDiscovery()
+	worker.StartMetadataUpdates()
+	worker.AdvertiseModel(ctx, crowdllama.WorkerNamespace)
+
+	// Wait for discovery
+	time.Sleep(5 * time.Second)
+
+	// Verify worker metadata is valid
+	workers := consumer.GetAvailableWorkers()
+	workerPeerID := worker.Host.ID().String()
+
+	if len(workers) == 0 {
+		t.Fatal("No workers discovered")
+	}
+
+	workerResource, exists := workers[workerPeerID]
+	if !exists {
+		t.Fatalf("Worker %s not found", workerPeerID)
+	}
+
+	// Validate metadata fields
+	if workerResource.PeerID == "" {
+		t.Error("Worker PeerID should not be empty")
+	}
+
+	if workerResource.GPUModel == "" {
+		t.Error("Worker GPU model should not be empty")
+	}
+
+	if workerResource.VRAMGB <= 0 {
+		t.Error("Worker VRAM should be greater than 0")
+	}
+
+	if len(workerResource.SupportedModels) == 0 {
+		t.Error("Worker should support at least one model")
+	}
+
+	if workerResource.TokensThroughput <= 0 {
+		t.Error("Worker tokens throughput should be greater than 0")
+	}
+
+	t.Logf("Metadata validation passed: worker %s has valid metadata", workerPeerID)
+	t.Logf("GPU Model: %s, VRAM: %dGB, Supported Models: %v",
+		workerResource.GPUModel, workerResource.VRAMGB, workerResource.SupportedModels)
+}
+
+// TestConcurrentPeerManagement tests that peer management works correctly under concurrent access
+func TestConcurrentPeerManagement(t *testing.T) {
+	// Set test mode
+	if err := os.Setenv("CROWDLLAMA_TEST_MODE", "1"); err != nil {
+		t.Fatalf("Failed to set test mode: %v", err)
+	}
+	defer func() {
+		if err := os.Unsetenv("CROWDLLAMA_TEST_MODE"); err != nil {
+			t.Logf("Failed to unset test mode: %v", err)
+		}
+	}()
+
+	logger := zap.NewNop()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	// Create test configuration
+	cfg := &config.Configuration{
+		BootstrapPeers: []string{},
+	}
+
+	// Generate keys
+	consumerKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
+	if err != nil {
+		t.Fatalf("Failed to generate consumer key: %v", err)
+	}
+
+	// Create consumer
+	consumer, err := consumer.NewConsumerWithConfig(ctx, logger, consumerKey, cfg)
+	if err != nil {
+		t.Fatalf("Failed to create consumer: %v", err)
+	}
+	defer consumer.StopBackgroundDiscovery()
+
+	// Start discovery
+	consumer.StartBackgroundDiscovery()
+
+	// Create multiple workers concurrently
+	numWorkers := 5
+	workers := make([]*worker.Worker, numWorkers)
+
+	for i := 0; i < numWorkers; i++ {
+		workerKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
+		if err != nil {
+			t.Fatalf("Failed to generate worker key %d: %v", i, err)
+		}
+
+		worker, err := worker.NewWorkerWithConfig(ctx, workerKey, cfg)
+		if err != nil {
+			t.Fatalf("Failed to create worker %d: %v", i, err)
+		}
+		workers[i] = worker
+		defer worker.StopMetadataUpdates()
+
+		// Start worker discovery
+		worker.StartMetadataUpdates()
+		worker.SetupMetadataHandler()
+		worker.AdvertiseModel(ctx, crowdllama.WorkerNamespace)
+	}
+
+	// Wait for all workers to be discovered
+	time.Sleep(10 * time.Second)
+
+	// Verify all workers are discovered
+	discoveredWorkers := consumer.GetAvailableWorkers()
+	if len(discoveredWorkers) != numWorkers {
+		t.Errorf("Expected %d workers, but found %d", numWorkers, len(discoveredWorkers))
+	}
+
+	t.Logf("Successfully discovered %d workers concurrently", len(discoveredWorkers))
+
+	// Stop half of the workers
+	for i := 0; i < numWorkers/2; i++ {
+		workers[i].StopMetadataUpdates()
+	}
+
+	// Wait for cleanup
+	time.Sleep(35 * time.Second)
+
+	// Verify only healthy workers remain
+	remainingWorkers := consumer.GetAvailableWorkers()
+	expectedRemaining := numWorkers - numWorkers/2
+	if len(remainingWorkers) != expectedRemaining {
+		t.Errorf("Expected %d remaining workers, but found %d", expectedRemaining, len(remainingWorkers))
+	}
+
+	t.Logf("Concurrent peer management test completed: %d workers remaining", len(remainingWorkers))
 }

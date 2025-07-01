@@ -71,6 +71,10 @@ type Worker struct {
 	// Metadata update management
 	metadataCtx    context.Context
 	metadataCancel context.CancelFunc
+
+	// Advertising management
+	advertisingCtx    context.Context
+	advertisingCancel context.CancelFunc
 }
 
 // handleInferenceRequest processes an inference request from a consumer
@@ -219,13 +223,18 @@ func NewWorkerWithConfig(
 	// Create metadata context for managing metadata updates
 	metadataCtx, metadataCancel := context.WithCancel(ctx)
 
+	// Create advertising context for managing advertising
+	advertisingCtx, advertisingCancel := context.WithCancel(ctx)
+
 	worker := &Worker{
-		Host:           h,
-		DHT:            kadDHT,
-		Metadata:       metadata,
-		Config:         cfg,
-		metadataCtx:    metadataCtx,
-		metadataCancel: metadataCancel,
+		Host:              h,
+		DHT:               kadDHT,
+		Metadata:          metadata,
+		Config:            cfg,
+		metadataCtx:       metadataCtx,
+		metadataCancel:    metadataCancel,
+		advertisingCtx:    advertisingCtx,
+		advertisingCancel: advertisingCancel,
 	}
 
 	// Set up stream handler with the worker instance
@@ -307,7 +316,7 @@ func (w *Worker) StartMetadataUpdates() {
 	go func() {
 		// Use shorter interval for testing environments
 		updateInterval := MetadataUpdateInterval
-		if os.Getenv("CROW DLLAMA_TEST_MODE") == "1" {
+		if os.Getenv("CROWDLLAMA_TEST_MODE") == "1" {
 			updateInterval = 5 * time.Second
 		}
 
@@ -338,6 +347,16 @@ func (w *Worker) StopMetadataUpdates() {
 	if w.metadataCancel != nil {
 		w.metadataCancel()
 	}
+	// Stop advertising to the DHT
+	w.stopAdvertising()
+	// Remove metadata handler
+	w.removeMetadataHandler()
+}
+
+// removeMetadataHandler removes the metadata protocol handler
+func (w *Worker) removeMetadataHandler() {
+	w.Host.RemoveStreamHandler(crowdllama.MetadataProtocol)
+	log.Printf("Removed metadata handler for protocol: %s", crowdllama.MetadataProtocol)
 }
 
 // PublishMetadata publishes the worker's metadata to the DHT
@@ -366,38 +385,49 @@ func (w *Worker) PublishMetadata(ctx context.Context) error {
 }
 
 // AdvertiseModel periodically announces model availability and advertises the worker using Provide
-func (w *Worker) AdvertiseModel(ctx context.Context, _ string) {
+func (w *Worker) AdvertiseModel(_ context.Context, namespace string) {
 	go func() {
 		// Use shorter interval for testing environments
 		advertiseInterval := 1 * time.Second
-		if os.Getenv("CROW DLLAMA_TEST_MODE") == "1" {
+		if os.Getenv("CROWDLLAMA_TEST_MODE") == "1" {
 			advertiseInterval = 500 * time.Millisecond
 		}
 
 		ticker := time.NewTicker(advertiseInterval)
 		defer ticker.Stop()
 
-		// Get the namespace CID using the unified function
-		namespaceCID, err := discovery.GetWorkerNamespaceCID()
+		// Get the namespace CID using the provided namespace parameter
+		mh, err := multihash.Sum([]byte(namespace), multihash.IDENTITY, -1)
 		if err != nil {
-			panic("Failed to get namespace CID: " + err.Error())
+			panic("Failed to create multihash for namespace: " + err.Error())
 		}
+		namespaceCID := cid.NewCidV1(cid.Raw, mh)
+
+		log.Printf("Worker advertising with namespace: %s, CID: %s", namespace, namespaceCID.String())
 
 		for {
 			select {
 			case <-ticker.C:
 				// Advertise the worker using Provide
-				err := w.DHT.Provide(ctx, namespaceCID, true)
+				err := w.DHT.Provide(w.advertisingCtx, namespaceCID, true)
 				if err != nil {
 					log.Printf("Failed to advertise worker: %v", err)
 				} else {
 					log.Printf("Worker advertised with CID: %s", namespaceCID.String())
 				}
-			case <-ctx.Done():
+			case <-w.advertisingCtx.Done():
+				log.Printf("Worker advertising stopped")
 				return
 			}
 		}
 	}()
+}
+
+// stopAdvertising stops the advertising process
+func (w *Worker) stopAdvertising() {
+	if w.advertisingCancel != nil {
+		w.advertisingCancel()
+	}
 }
 
 // BootstrapWithPeer bootstraps the worker's DHT with a peer

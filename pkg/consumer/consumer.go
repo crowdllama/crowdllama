@@ -9,7 +9,6 @@ import (
 	"math/big"
 	"net/http"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/ipfs/go-cid"
@@ -21,6 +20,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matiasinsaurralde/crowdllama/internal/discovery"
+	"github.com/matiasinsaurralde/crowdllama/internal/peermanager"
 	"github.com/matiasinsaurralde/crowdllama/pkg/config"
 	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
 )
@@ -35,7 +35,16 @@ const DefaultHTTPPort = 9001
 const DiscoveryInterval = 10 * time.Second
 
 // WorkerMapTimeout is how long to keep workers in the map
-const WorkerMapTimeout = 30 * time.Second
+const WorkerMapTimeout = 5 * time.Minute
+
+// HealthCheckInterval is how often to check worker health
+const HealthCheckInterval = 2 * time.Minute
+
+// MaxFailedAttempts is the maximum number of failed attempts before marking a worker as unhealthy
+const MaxFailedAttempts = 3
+
+// BackoffBase is the base time for exponential backoff (doubles each failure)
+const BackoffBase = 30 * time.Second
 
 // GenerateRequest represents the JSON request structure for the /api/generate endpoint
 type GenerateRequest struct {
@@ -70,16 +79,9 @@ type Consumer struct {
 	server          *http.Server
 	logger          *zap.Logger
 	Resource        *crowdllama.Resource
-	workers         map[string]*workerInfo
-	workersMutex    sync.RWMutex
+	peerManager     *peermanager.Manager
 	discoveryCtx    context.Context
 	discoveryCancel context.CancelFunc
-}
-
-// workerInfo holds worker metadata with timestamp for cleanup
-type workerInfo struct {
-	Resource *crowdllama.Resource
-	LastSeen time.Time
 }
 
 // NewConsumerWithConfig creates a new consumer instance using the provided configuration
@@ -107,14 +109,29 @@ func NewConsumerWithConfig(
 
 	discoveryCtx, discoveryCancel := context.WithCancel(ctx)
 
-	return &Consumer{
+	// Initialize peer manager with test configuration if in test mode
+	peerConfig := peermanager.DefaultConfig()
+	if os.Getenv("CROWDLLAMA_TEST_MODE") == "1" {
+		peerConfig = &peermanager.Config{
+			StalePeerTimeout:    30 * time.Second, // Shorter for testing
+			HealthCheckInterval: 5 * time.Second,
+			MaxFailedAttempts:   2,
+			BackoffBase:         5 * time.Second,
+			MetadataTimeout:     2 * time.Second,
+			MaxMetadataAge:      30 * time.Second,
+		}
+	}
+
+	consumer := &Consumer{
 		Host:            h,
 		DHT:             kadDHT,
 		logger:          logger,
-		workers:         make(map[string]*workerInfo),
+		peerManager:     peermanager.NewManager(ctx, h, logger, peerConfig),
 		discoveryCtx:    discoveryCtx,
 		discoveryCancel: discoveryCancel,
-	}, nil
+	}
+
+	return consumer, nil
 }
 
 // NewConsumer creates a new consumer instance
@@ -130,6 +147,7 @@ func (c *Consumer) StartHTTPServer(port int) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/chat", c.handleChat)
+	mux.HandleFunc("/api/health", c.handleHealth)
 
 	// Wrap the mux with logging middleware
 	loggedMux := c.loggingMiddleware(mux)
@@ -403,17 +421,18 @@ func (c *Consumer) FindBestWorker(ctx context.Context, requiredModel string) (*c
 
 // findBestWorkerFromCache finds a suitable worker from the cached worker map using randomized selection
 func (c *Consumer) findBestWorkerFromCache(requiredModel string) *crowdllama.Resource {
-	c.workersMutex.RLock()
-	defer c.workersMutex.RUnlock()
-
-	if len(c.workers) == 0 {
+	healthyPeers := c.peerManager.GetHealthyPeers()
+	if len(healthyPeers) == 0 {
 		return nil
 	}
 
-	// Collect all workers that support the required model
+	// Collect all healthy workers that support the required model
 	var suitableWorkers []*crowdllama.Resource
-	for _, info := range c.workers {
-		worker := info.Resource
+	for _, info := range healthyPeers {
+		worker := info.Metadata
+		if worker == nil {
+			continue
+		}
 
 		// Check if worker supports the required model
 		supportsModel := false
@@ -485,6 +504,9 @@ func (c *Consumer) DiscoverWorkersViaProviders(ctx context.Context, namespace st
 func (c *Consumer) StartBackgroundDiscovery() {
 	c.logger.Info("Starting background worker discovery")
 
+	// Start the peer manager
+	c.peerManager.Start()
+
 	go func() {
 		// Use shorter interval for testing environments
 		discoveryInterval := DiscoveryInterval
@@ -508,9 +530,6 @@ func (c *Consumer) StartBackgroundDiscovery() {
 			}
 		}
 	}()
-
-	// Start cleanup goroutine
-	go c.cleanupStaleWorkers()
 }
 
 // runDiscovery performs a single discovery run and updates the worker map
@@ -524,68 +543,45 @@ func (c *Consumer) runDiscovery() {
 		return
 	}
 
-	c.workersMutex.Lock()
-	defer c.workersMutex.Unlock()
-
-	now := time.Now()
 	updatedCount := 0
-
 	for _, worker := range workers {
-		workerID := worker.PeerID
-		c.workers[workerID] = &workerInfo{
-			Resource: worker,
-			LastSeen: now,
-		}
+		c.peerManager.AddOrUpdatePeer(worker.PeerID, worker)
 		updatedCount++
 	}
 
 	if updatedCount > 0 {
 		c.logger.Info("Background discovery updated workers",
 			zap.Int("updated_count", updatedCount),
-			zap.Int("total_workers", len(c.workers)))
+			zap.Int("total_workers", len(c.peerManager.GetAllPeers())))
 	}
 }
 
-// cleanupStaleWorkers removes workers that haven't been seen recently
-func (c *Consumer) cleanupStaleWorkers() {
-	ticker := time.NewTicker(WorkerMapTimeout)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			c.workersMutex.Lock()
-			now := time.Now()
-			removedCount := 0
-
-			for workerID, info := range c.workers {
-				if now.Sub(info.LastSeen) > WorkerMapTimeout {
-					delete(c.workers, workerID)
-					removedCount++
-				}
-			}
-
-			if removedCount > 0 {
-				c.logger.Info("Cleaned up stale workers",
-					zap.Int("removed_count", removedCount),
-					zap.Int("remaining_workers", len(c.workers)))
-			}
-			c.workersMutex.Unlock()
-
-		case <-c.discoveryCtx.Done():
-			return
+// GetAvailableWorkers returns a copy of the current worker map (only healthy workers)
+func (c *Consumer) GetAvailableWorkers() map[string]*crowdllama.Resource {
+	result := make(map[string]*crowdllama.Resource)
+	for peerID, info := range c.peerManager.GetHealthyPeers() {
+		if info.Metadata != nil {
+			result[peerID] = info.Metadata
 		}
 	}
+	return result
 }
 
-// GetAvailableWorkers returns a copy of the current worker map
-func (c *Consumer) GetAvailableWorkers() map[string]*crowdllama.Resource {
-	c.workersMutex.RLock()
-	defer c.workersMutex.RUnlock()
-
-	result := make(map[string]*crowdllama.Resource)
-	for workerID, info := range c.workers {
-		result[workerID] = info.Resource
+// GetWorkerHealthStatus returns detailed health information about all workers
+func (c *Consumer) GetWorkerHealthStatus() map[string]map[string]interface{} {
+	result := make(map[string]map[string]interface{})
+	for peerID, info := range c.peerManager.GetAllPeers() {
+		result[peerID] = map[string]interface{}{
+			"is_healthy":        info.IsHealthy,
+			"last_seen":         info.LastSeen,
+			"last_health_check": info.LastHealthCheck,
+			"failed_attempts":   info.FailedAttempts,
+			"last_failure":      info.LastFailure,
+		}
+		if info.Metadata != nil {
+			result[peerID]["gpu_model"] = info.Metadata.GPUModel
+			result[peerID]["supported_models"] = info.Metadata.SupportedModels
+		}
 	}
 	return result
 }
@@ -595,6 +591,7 @@ func (c *Consumer) StopBackgroundDiscovery() {
 	if c.discoveryCancel != nil {
 		c.discoveryCancel()
 	}
+	c.peerManager.Stop()
 }
 
 // GetPeerID returns the consumer's peer ID
@@ -646,4 +643,15 @@ func (c *Consumer) HasPeer(peerID string) bool {
 // GetConnectedPeersCount returns the number of connected peers
 func (c *Consumer) GetConnectedPeersCount() int {
 	return len(c.Host.Network().Peers())
+}
+
+// handleHealth handles the /api/health endpoint
+func (c *Consumer) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	healthStatus := c.GetWorkerHealthStatus()
+	c.sendJSONResponse(w, healthStatus, http.StatusOK)
 }
