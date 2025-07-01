@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.24-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS builder
 
 # Install git and ca-certificates (needed for go mod download)
 RUN apk add --no-cache git ca-certificates
@@ -20,6 +20,8 @@ COPY . .
 ARG VERSION=dev
 ARG COMMIT_HASH=unknown
 ARG BUILD_DATE=unknown
+ARG TARGETPLATFORM
+ARG BUILDPLATFORM
 
 # Build the dht binary with version information
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo \
