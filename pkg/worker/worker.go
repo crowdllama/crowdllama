@@ -20,6 +20,7 @@ import (
 	"github.com/multiformats/go-multihash"
 
 	"github.com/matiasinsaurralde/crowdllama/internal/discovery"
+	"github.com/matiasinsaurralde/crowdllama/pkg/config"
 	"github.com/matiasinsaurralde/crowdllama/pkg/consumer"
 	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
 )
@@ -62,10 +63,10 @@ type OllamaResponse struct {
 
 // Worker represents a CrowdLlama worker node
 type Worker struct {
-	Host      host.Host
-	DHT       *dht.IpfsDHT
-	Metadata  *crowdllama.Resource
-	OllamaURL string // Configurable Ollama URL for testing
+	Host     host.Host
+	DHT      *dht.IpfsDHT
+	Metadata *crowdllama.Resource
+	Config   *config.Configuration // Configuration for the worker
 
 	// Metadata update management
 	metadataCtx    context.Context
@@ -73,7 +74,7 @@ type Worker struct {
 }
 
 // handleInferenceRequest processes an inference request from a consumer
-func handleInferenceRequest(ctx context.Context, s network.Stream, ollamaURL string) {
+func (w *Worker) handleInferenceRequest(ctx context.Context, s network.Stream) {
 	defer func() {
 		if err := s.Close(); err != nil {
 			log.Printf("failed to close stream: %v", err)
@@ -82,19 +83,19 @@ func handleInferenceRequest(ctx context.Context, s network.Stream, ollamaURL str
 
 	fmt.Println("StreamHandler is called")
 
-	input, err := readInferenceInput(s)
+	input, err := w.readInferenceInput(s)
 	if err != nil {
 		log.Printf("Failed to read inference input: %v", err)
 		return
 	}
 
-	output, err := callOllamaAPI(ctx, input, ollamaURL)
+	output, err := w.callOllamaAPI(ctx, input, "/api/chat")
 	if err != nil {
 		log.Printf("Failed to call Ollama API: %v", err)
 		return
 	}
 
-	if err := writeInferenceResponse(s, output); err != nil {
+	if err := w.writeInferenceResponse(s, output); err != nil {
 		log.Printf("Failed to write inference response: %v", err)
 		return
 	}
@@ -103,7 +104,7 @@ func handleInferenceRequest(ctx context.Context, s network.Stream, ollamaURL str
 	fmt.Println("StreamHandler completed")
 }
 
-func readInferenceInput(s network.Stream) (string, error) {
+func (w *Worker) readInferenceInput(s network.Stream) (string, error) {
 	if err := s.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		return "", fmt.Errorf("failed to set read deadline: %w", err)
 	}
@@ -119,7 +120,7 @@ func readInferenceInput(s network.Stream) (string, error) {
 	return input, nil
 }
 
-func callOllamaAPI(ctx context.Context, input, ollamaURL string) (string, error) {
+func (w *Worker) callOllamaAPI(ctx context.Context, input, apiPath string) (string, error) {
 	ollamaReq := OllamaRequest{
 		Model: "tinyllama",
 		Messages: []Message{
@@ -136,11 +137,13 @@ func callOllamaAPI(ctx context.Context, input, ollamaURL string) (string, error)
 		return "", fmt.Errorf("failed to marshal Ollama request: %w", err)
 	}
 
-	if ollamaURL == "" {
-		ollamaURL = "http://localhost:11434/api/chat"
+	baseURL := w.Config.GetOllamaBaseURL()
+	if baseURL == "" {
+		baseURL = "http://localhost:11434"
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", ollamaURL, bytes.NewBuffer(reqBody))
+	fullURL := baseURL + apiPath
+	req, err := http.NewRequestWithContext(ctx, "POST", fullURL, bytes.NewBuffer(reqBody))
 	if err != nil {
 		return "", fmt.Errorf("failed to create HTTP request: %w", err)
 	}
@@ -174,7 +177,7 @@ func callOllamaAPI(ctx context.Context, input, ollamaURL string) (string, error)
 	return output, nil
 }
 
-func writeInferenceResponse(s network.Stream, output string) error {
+func (w *Worker) writeInferenceResponse(s network.Stream, output string) error {
 	responseBytes := []byte(output)
 	log.Printf("Worker writing %d bytes: %s", len(responseBytes), output)
 
@@ -186,22 +189,11 @@ func writeInferenceResponse(s network.Stream, output string) error {
 	return nil
 }
 
-// NewWorker creates a new worker instance
-func NewWorker(ctx context.Context, privKey crypto.PrivKey) (*Worker, error) {
-	return NewWorkerWithBootstrapPeers(ctx, privKey, nil)
-}
-
-// NewWorkerWithBootstrapPeers creates a new worker instance with custom bootstrap peers
-func NewWorkerWithBootstrapPeers(ctx context.Context, privKey crypto.PrivKey, bootstrapPeers []string) (*Worker, error) {
-	return NewWorkerWithBootstrapPeersAndOllamaURL(ctx, privKey, bootstrapPeers, "")
-}
-
-// NewWorkerWithBootstrapPeersAndOllamaURL creates a new worker instance with custom bootstrap peers and Ollama URL
-func NewWorkerWithBootstrapPeersAndOllamaURL(
+// NewWorkerWithConfig creates a new worker instance using the provided configuration
+func NewWorkerWithConfig(
 	ctx context.Context,
 	privKey crypto.PrivKey,
-	bootstrapPeers []string,
-	ollamaURL string,
+	cfg *config.Configuration,
 ) (*Worker, error) {
 	h, kadDHT, err := discovery.NewHostAndDHT(ctx, privKey)
 	if err != nil {
@@ -209,8 +201,8 @@ func NewWorkerWithBootstrapPeersAndOllamaURL(
 	}
 
 	// Bootstrap with custom peers if provided, otherwise use defaults
-	if len(bootstrapPeers) > 0 {
-		if err := discovery.BootstrapDHTWithPeers(ctx, h, kadDHT, bootstrapPeers); err != nil {
+	if len(cfg.BootstrapPeers) > 0 {
+		if err := discovery.BootstrapDHTWithPeers(ctx, h, kadDHT, cfg.BootstrapPeers); err != nil {
 			return nil, fmt.Errorf("bootstrap DHT with custom peers: %w", err)
 		}
 	} else {
@@ -220,9 +212,6 @@ func NewWorkerWithBootstrapPeersAndOllamaURL(
 	}
 
 	fmt.Println("BootstrapDHT ok")
-	h.SetStreamHandler(consumer.InferenceProtocol, func(s network.Stream) {
-		handleInferenceRequest(ctx, s, ollamaURL)
-	})
 
 	// Initialize metadata
 	metadata := crowdllama.NewCrowdLlamaResource(h.ID().String())
@@ -230,14 +219,26 @@ func NewWorkerWithBootstrapPeersAndOllamaURL(
 	// Create metadata context for managing metadata updates
 	metadataCtx, metadataCancel := context.WithCancel(ctx)
 
-	return &Worker{
+	worker := &Worker{
 		Host:           h,
 		DHT:            kadDHT,
 		Metadata:       metadata,
-		OllamaURL:      ollamaURL,
+		Config:         cfg,
 		metadataCtx:    metadataCtx,
 		metadataCancel: metadataCancel,
-	}, nil
+	}
+
+	// Set up stream handler with the worker instance
+	h.SetStreamHandler(consumer.InferenceProtocol, func(s network.Stream) {
+		worker.handleInferenceRequest(ctx, s)
+	})
+
+	return worker, nil
+}
+
+// NewWorker creates a new worker instance
+func NewWorker(ctx context.Context, privKey crypto.PrivKey, cfg *config.Configuration) (*Worker, error) {
+	return NewWorkerWithConfig(ctx, privKey, cfg)
 }
 
 // SetupMetadataHandler sets up the metadata request handler

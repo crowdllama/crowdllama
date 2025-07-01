@@ -14,6 +14,7 @@ import (
 
 	"github.com/matiasinsaurralde/crowdllama/internal/discovery"
 	"github.com/matiasinsaurralde/crowdllama/internal/keys"
+	"github.com/matiasinsaurralde/crowdllama/pkg/config"
 	"github.com/matiasinsaurralde/crowdllama/pkg/dht"
 )
 
@@ -140,6 +141,10 @@ func stepLogDHTServerInfoWorker(t *testing.T, dhtServer *dht.Server, dhtPeerAddr
 func stepInitWorker(ctx context.Context, t *testing.T, workerPrivKey crypto.PrivKey, dhtPeerAddr string) *Worker {
 	t.Helper()
 
+	// Create a default config and set BootstrapPeers
+	cfg := config.NewConfiguration()
+	cfg.BootstrapPeers = []string{dhtPeerAddr}
+
 	// Try to create worker with retry logic
 	var worker *Worker
 	var err error
@@ -148,7 +153,7 @@ func stepInitWorker(ctx context.Context, t *testing.T, workerPrivKey crypto.Priv
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		t.Logf("Attempt %d/%d: Creating worker with bootstrap peer: %s", attempt, maxRetries, dhtPeerAddr)
 
-		worker, err = NewWorkerWithBootstrapPeers(ctx, workerPrivKey, []string{dhtPeerAddr})
+		worker, err = NewWorkerWithConfig(ctx, workerPrivKey, cfg)
 		if err == nil {
 			t.Logf("✅ Worker created successfully on attempt %d", attempt)
 			break
