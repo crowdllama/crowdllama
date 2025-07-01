@@ -63,20 +63,23 @@ type Manager struct {
 	logger *zap.Logger
 	config *Config
 	peers  map[string]*PeerInfo
-	mu     sync.RWMutex
-	ctx    context.Context
-	cancel context.CancelFunc
+	// recentlyRemoved tracks peers that were recently removed to prevent re-adding them
+	recentlyRemoved map[string]time.Time
+	mu              sync.RWMutex
+	ctx             context.Context
+	cancel          context.CancelFunc
 }
 
 func NewManager(ctx context.Context, host host.Host, logger *zap.Logger, config *Config) *Manager {
 	ctx, cancel := context.WithCancel(ctx)
 	return &Manager{
-		host:   host,
-		logger: logger,
-		config: config,
-		peers:  make(map[string]*PeerInfo),
-		ctx:    ctx,
-		cancel: cancel,
+		host:            host,
+		logger:          logger,
+		config:          config,
+		peers:           make(map[string]*PeerInfo),
+		recentlyRemoved: make(map[string]time.Time),
+		ctx:             ctx,
+		cancel:          cancel,
 	}
 }
 
@@ -118,6 +121,8 @@ func (pm *Manager) RemovePeer(peerID string) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	delete(pm.peers, peerID)
+	// Add to recently removed list to prevent re-adding
+	pm.recentlyRemoved[peerID] = time.Now()
 	pm.logger.Info("Removed peer from manager", zap.String("peer_id", peerID))
 }
 
@@ -141,6 +146,28 @@ func (pm *Manager) GetAllPeers() map[string]*PeerInfo {
 		result[peerID] = info
 	}
 	return result
+}
+
+// IsPeerUnhealthy checks if a peer is marked as unhealthy or was recently removed
+func (pm *Manager) IsPeerUnhealthy(peerID string) bool {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+
+	// Check if peer is currently in the manager and unhealthy
+	if info, exists := pm.peers[peerID]; exists {
+		return !info.IsHealthy || info.FailedAttempts >= pm.config.MaxFailedAttempts
+	}
+
+	// Check if peer was recently removed (within the last 5 minutes)
+	if removedTime, wasRemoved := pm.recentlyRemoved[peerID]; wasRemoved {
+		if time.Since(removedTime) < 5*time.Minute {
+			return true // Consider recently removed peers as unhealthy
+		}
+		// Clean up old entries
+		delete(pm.recentlyRemoved, peerID)
+	}
+
+	return false
 }
 
 func (pm *Manager) healthCheckLoop() {

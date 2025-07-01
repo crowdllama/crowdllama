@@ -338,6 +338,12 @@ func (s *Server) handlePeerDisconnected(_ network.Network, conn network.Conn) {
 	s.logger.Info("Peer disconnected",
 		zap.String("peer_id", peerID),
 		zap.String("remote_addr", remoteAddr))
+
+	// Immediately remove the peer from the peer manager when disconnection is detected
+	// This provides faster cleanup than waiting for health checks
+	s.peerManager.RemovePeer(peerID)
+	s.logger.Info("Removed peer from manager due to disconnection",
+		zap.String("peer_id", peerID))
 }
 
 // discoverWorkersPeriodically periodically discovers workers advertising the namespace
@@ -377,16 +383,25 @@ func (s *Server) discoverWorkersPeriodically() {
 			workerCount := 0
 
 			for provider := range providers {
+				workerPeerID := provider.ID.String()
+
+				// Check if this worker is already marked as unhealthy in the peer manager
+				if s.peerManager.IsPeerUnhealthy(workerPeerID) {
+					s.logger.Debug("Skipping unhealthy worker",
+						zap.String("worker_peer_id", workerPeerID))
+					continue
+				}
+
 				workerCount++
 				s.logger.Info("Found worker",
-					zap.String("worker_peer_id", provider.ID.String()),
+					zap.String("worker_peer_id", workerPeerID),
 					zap.Strings("addresses", s.multiaddrsToStrings(provider.Addrs)))
 
 				// Request metadata from the worker
 				metadata, err := s.requestWorkerMetadata(context.Background(), provider.ID)
 				if err != nil {
 					s.logger.Error("Failed to get metadata from worker",
-						zap.String("worker_peer_id", provider.ID.String()),
+						zap.String("worker_peer_id", workerPeerID),
 						zap.Error(err))
 					// Don't add to peer manager if metadata request fails
 					continue
