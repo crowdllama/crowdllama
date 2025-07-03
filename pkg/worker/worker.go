@@ -23,6 +23,7 @@ import (
 	"github.com/matiasinsaurralde/crowdllama/pkg/config"
 	"github.com/matiasinsaurralde/crowdllama/pkg/consumer"
 	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
+	"github.com/matiasinsaurralde/crowdllama/pkg/version"
 )
 
 // MetadataUpdateInterval is the interval at which worker metadata is updated
@@ -304,9 +305,10 @@ func (w *Worker) UpdateMetadata() error {
 	w.Metadata.Load = load
 	w.Metadata.GPUModel = gpuModel
 	w.Metadata.LastUpdated = time.Now()
+	w.Metadata.Version = version.CommitHash // Set the CrowdLlama version
 
-	log.Printf("Updated worker metadata - Models: %v, Throughput: %.1f tokens/sec, VRAM: %dGB, Load: %.1f, GPU: %s",
-		models, tokensThroughput, vramGB, load, gpuModel)
+	log.Printf("Updated worker metadata - Models: %v, Throughput: %.1f tokens/sec, VRAM: %dGB, Load: %.1f, GPU: %s, Version: %s",
+		models, tokensThroughput, vramGB, load, gpuModel, w.Metadata.Version)
 
 	return nil
 }

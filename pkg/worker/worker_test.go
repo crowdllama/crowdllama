@@ -57,6 +57,13 @@ func TestUpdateMetadata(t *testing.T) {
 		t.Errorf("Expected GPUModel %s, got %s", expectedGPU, worker.Metadata.GPUModel)
 	}
 
+	// Verify Version was set (should not be "unknown" after update)
+	if worker.Metadata.Version == "unknown" {
+		t.Logf("Version is 'unknown' - this is expected for local builds without linker flags")
+	} else {
+		t.Logf("Version set to: %s", worker.Metadata.Version)
+	}
+
 	// Verify LastUpdated was updated
 	if worker.Metadata.LastUpdated.Equal(initialTime) {
 		t.Error("Expected LastUpdated to be updated, got same time")

@@ -32,6 +32,7 @@ type Resource struct {
 	Load             float64   `json:"load"` // current load (0.0 to 1.0)
 	GPUModel         string    `json:"gpu_model"`
 	LastUpdated      time.Time `json:"last_updated"`
+	Version          string    `json:"version"` // CrowdLlama version (git commit hash)
 }
 
 // NewCrowdLlamaResource creates a new resource with the given peer ID
@@ -44,6 +45,7 @@ func NewCrowdLlamaResource(peerID string) *Resource {
 		Load:             0.0,
 		GPUModel:         "",
 		LastUpdated:      time.Now(),
+		Version:          "unknown", // Will be set during metadata update
 	}
 }
 

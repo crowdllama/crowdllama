@@ -35,6 +35,10 @@ func TestNewCrowdLlamaResource(t *testing.T) {
 	if resource.GPUModel != "" {
 		t.Errorf("Expected GPUModel to be empty, got %s", resource.GPUModel)
 	}
+
+	if resource.Version != "unknown" {
+		t.Errorf("Expected Version to be 'unknown', got %s", resource.Version)
+	}
 }
 
 func TestToJSON(t *testing.T) {
@@ -74,6 +78,7 @@ func TestFromJSON(t *testing.T) {
 	originalResource.VRAMGB = 8
 	originalResource.Load = 0.75
 	originalResource.GPUModel = "RTX 4090"
+	originalResource.Version = "abc123"
 	originalResource.LastUpdated = time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	jsonData, err := originalResource.ToJSON()
@@ -104,6 +109,10 @@ func TestFromJSON(t *testing.T) {
 
 	if parsedResource.GPUModel != originalResource.GPUModel {
 		t.Errorf("Expected GPUModel %s, got %s", originalResource.GPUModel, parsedResource.GPUModel)
+	}
+
+	if parsedResource.Version != originalResource.Version {
+		t.Errorf("Expected Version %s, got %s", originalResource.Version, parsedResource.Version)
 	}
 }
 
