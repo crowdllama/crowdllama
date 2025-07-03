@@ -14,18 +14,14 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        go-version: [1.24.4, 1.24.x, 1.23.x]
-        platform: [ubuntu-latest]
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Set up Go ${{ matrix.go-version }}
+    - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: ${{ matrix.go-version }}
+        go-version: ${{ env.GO_VERSION }}
         cache: true
 
     - name: Install dependencies
