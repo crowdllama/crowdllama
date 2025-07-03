@@ -41,7 +41,7 @@ var defaultListenAddrs = []string{"/ip4/0.0.0.0/tcp/0"}
 
 const (
 	// defaultBootstrapPeerAddr is the default bootstrap peer address for the DHT:
-	defaultBootstrapPeerAddr = "/dns4/dht.crowdllama.ai/tcp/9000/p2p/12D3KooWGDXKRromTN8jFpxzBqFKoxVzD3feaBpKBnj9YCLbakpw"
+	defaultBootstrapPeerAddr = "/dns4/dht.crowdllama.ai/tcp/9000/p2p/12D3KooWGtAsTBuXFJrywcneqUYsGLD6ym9en2uqc56g4fMySVcK"
 )
 
 // NewHostAndDHT creates a libp2p host with DHT
