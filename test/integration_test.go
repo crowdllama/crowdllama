@@ -1157,6 +1157,20 @@ func TestMetadataValidation(t *testing.T) {
 	assertWorkerMetadata(t, workerResource)
 }
 
+// Helper function to wait for a specific number of workers to remain
+func waitForWorkerCount(t *testing.T, consumer *consumerpkg.Consumer, expectedCount int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		workers := consumer.GetAvailableWorkers()
+		if len(workers) == expectedCount {
+			return // Expected number of workers found
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("Expected %d workers, but found %d after %v", expectedCount, len(consumer.GetAvailableWorkers()), timeout)
+}
+
 func TestConcurrentPeerManagement(t *testing.T) {
 	if err := os.Setenv("CROWDLLAMA_TEST_MODE", "1"); err != nil {
 		t.Fatalf("Failed to set test mode: %v", err)
@@ -1214,10 +1228,12 @@ func TestConcurrentPeerManagement(t *testing.T) {
 		workers[i].StopMetadataUpdates()
 	}
 
-	// Wait for workers to be removed
-	time.Sleep(5 * time.Second) // Give some time for health checks to run
-	remainingWorkers := consumer.GetAvailableWorkers()
+	// Wait for the expected number of workers to remain
 	expectedRemaining := numWorkers - numWorkers/2
+	waitForWorkerCount(t, consumer, expectedRemaining, 30*time.Second)
+
+	// Final verification
+	remainingWorkers := consumer.GetAvailableWorkers()
 	if len(remainingWorkers) != expectedRemaining {
 		t.Errorf("Expected %d remaining workers, but found %d", expectedRemaining, len(remainingWorkers))
 	}
