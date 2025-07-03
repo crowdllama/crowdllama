@@ -1,10 +1,16 @@
 package worker
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/libp2p/go-libp2p/core/crypto"
+	"go.uber.org/zap"
+
+	"github.com/matiasinsaurralde/crowdllama/pkg/config"
 	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
+	"github.com/matiasinsaurralde/crowdllama/pkg/testhelpers"
 )
 
 func TestUpdateMetadata(t *testing.T) {
@@ -89,4 +95,69 @@ func TestUpdateMetadataInterval(t *testing.T) {
 
 	// Restore original interval
 	SetMetadataUpdateInterval(originalInterval)
+}
+
+func TestWorkerDHTReconnection_Isolated(t *testing.T) {
+	logger := zap.NewNop()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// 1. Start isolated DHT with a specific private key
+	port := testhelpers.GetTestPort(t)
+	dhtPrivKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
+	if err != nil {
+		t.Fatalf("Failed to generate DHT key: %v", err)
+	}
+
+	dhtServer, bootstrapAddr := testhelpers.CreateIsolatedTestDHT(ctx, t, logger, port, dhtPrivKey)
+	defer dhtServer.Stop()
+
+	// 2. Start worker with DHT as bootstrap peer
+	cfg := &config.Configuration{BootstrapPeers: []string{bootstrapAddr}}
+	privKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
+	if err != nil {
+		t.Fatalf("Failed to generate key pair: %v", err)
+	}
+	worker, err := NewWorkerWithConfig(ctx, privKey, cfg)
+	if err != nil {
+		t.Fatalf("Failed to create worker: %v", err)
+	}
+	defer worker.StopMetadataUpdates()
+
+	// 3. Wait for worker to connect to DHT
+	waitForCondition(t, 10*time.Second, func() bool {
+		return worker.IsDHTConnected()
+	}, "worker to connect to DHT")
+
+	// 4. Stop the DHT server
+	dhtServer.Stop()
+
+	// 5. Wait for worker to detect DHT disconnection
+	waitForCondition(t, 10*time.Second, func() bool {
+		_ = worker.PublishMetadata(ctx) // Trigger DHT activity to detect disconnection
+		return !worker.IsDHTConnected()
+	}, "worker to detect DHT disconnection")
+
+	// 6. Restart DHT server with the same private key
+	dhtServer2, _ := testhelpers.CreateIsolatedTestDHT(ctx, t, logger, port, dhtPrivKey)
+	defer dhtServer2.Stop()
+
+	// 7. Wait for worker to reconnect
+	waitForCondition(t, 10*time.Second, func() bool {
+		_ = worker.PublishMetadata(ctx) // Actively trigger DHT activity to prompt reconnection
+		return worker.IsDHTConnected()
+	}, "worker to reconnect to DHT")
+}
+
+// waitForCondition polls until the condition returns true or times out.
+func waitForCondition(t *testing.T, timeout time.Duration, cond func() bool, desc string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("Condition not met within %v: %s", timeout, desc)
 }

@@ -76,6 +76,9 @@ type Worker struct {
 	// Advertising management
 	advertisingCtx    context.Context
 	advertisingCancel context.CancelFunc
+
+	// Bootstrap peers for reconnection
+	bootstrapPeers []string
 }
 
 // handleInferenceRequest processes an inference request from a consumer
@@ -236,6 +239,7 @@ func NewWorkerWithConfig(
 		metadataCancel:    metadataCancel,
 		advertisingCtx:    advertisingCtx,
 		advertisingCancel: advertisingCancel,
+		bootstrapPeers:    cfg.BootstrapPeers,
 	}
 
 	// Set up stream handler with the worker instance
@@ -363,6 +367,22 @@ func (w *Worker) removeMetadataHandler() {
 
 // PublishMetadata publishes the worker's metadata to the DHT
 func (w *Worker) PublishMetadata(ctx context.Context) error {
+	// Check if DHT is connected before attempting to publish
+	if !w.IsDHTConnected() {
+		log.Printf("DHT is disconnected, attempting to reconnect to bootstrap peers...")
+		if err := w.AttemptBootstrapReconnection(ctx); err != nil {
+			return fmt.Errorf("failed to reconnect to bootstrap peers: %w", err)
+		}
+
+		// Give the DHT a moment to establish connections
+		time.Sleep(2 * time.Second)
+
+		// Check again if reconnection was successful
+		if !w.IsDHTConnected() {
+			return fmt.Errorf("DHT is still disconnected after reconnection attempt")
+		}
+	}
+
 	data, err := w.Metadata.ToJSON()
 	if err != nil {
 		return fmt.Errorf("failed to serialize metadata: %w", err)
@@ -410,6 +430,24 @@ func (w *Worker) AdvertiseModel(_ context.Context, namespace string) {
 		for {
 			select {
 			case <-ticker.C:
+				// Check if DHT is connected before attempting to advertise
+				if !w.IsDHTConnected() {
+					log.Printf("DHT is disconnected, attempting to reconnect to bootstrap peers...")
+					if err := w.AttemptBootstrapReconnection(w.advertisingCtx); err != nil {
+						log.Printf("Failed to reconnect to bootstrap peers: %v", err)
+						continue // Skip this advertising cycle and try again next time
+					}
+
+					// Give the DHT a moment to establish connections
+					time.Sleep(2 * time.Second)
+
+					// Check again if reconnection was successful
+					if !w.IsDHTConnected() {
+						log.Printf("DHT is still disconnected after reconnection attempt, skipping advertisement")
+						continue // Skip this advertising cycle and try again next time
+					}
+				}
+
 				// Advertise the worker using Provide
 				err := w.DHT.Provide(w.advertisingCtx, namespaceCID, true)
 				if err != nil {
@@ -437,5 +475,31 @@ func BootstrapWithPeer(ctx context.Context, w *Worker) error {
 	if err := discovery.BootstrapDHT(ctx, w.Host, w.DHT); err != nil {
 		return fmt.Errorf("bootstrap DHT: %w", err)
 	}
+	return nil
+}
+
+// IsDHTConnected checks if the DHT has any peers in its routing table
+func (w *Worker) IsDHTConnected() bool {
+	// Check if we have any peers in the DHT routing table
+	peers := w.DHT.RoutingTable().ListPeers()
+	return len(peers) > 0
+}
+
+// AttemptBootstrapReconnection attempts to reconnect to bootstrap peers
+func (w *Worker) AttemptBootstrapReconnection(ctx context.Context) error {
+	log.Printf("Attempting to reconnect to bootstrap peers...")
+
+	// Use custom bootstrap peers if configured, otherwise use defaults
+	if len(w.bootstrapPeers) > 0 {
+		if err := discovery.BootstrapDHTWithPeers(ctx, w.Host, w.DHT, w.bootstrapPeers); err != nil {
+			return fmt.Errorf("failed to reconnect to custom bootstrap peers: %w", err)
+		}
+	} else {
+		if err := discovery.BootstrapDHT(ctx, w.Host, w.DHT); err != nil {
+			return fmt.Errorf("failed to reconnect to default bootstrap peers: %w", err)
+		}
+	}
+
+	log.Printf("Successfully reconnected to bootstrap peers")
 	return nil
 }
