@@ -113,6 +113,7 @@ jobs:
         go build -v -o bin/consumer-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/consumer
         go build -v -o bin/worker-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/worker
         go build -v -o bin/dht-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/dht
+        go build -v -o bin/crowdllama-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/crowdllama
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
@@ -153,6 +154,7 @@ jobs:
           ghcr.io/${{ github.repository }}/consumer
           ghcr.io/${{ github.repository }}/worker
           ghcr.io/${{ github.repository }}/dht
+          ghcr.io/${{ github.repository }}/crowdllama
         tags: |
           type=ref,event=branch
           type=ref,event=pr
@@ -210,6 +212,22 @@ jobs:
         tags: |
           ghcr.io/${{ github.repository }}/dht:latest
           ghcr.io/${{ github.repository }}/dht:${{ steps.commit.outputs.hash }}
+        labels: ${{ steps.meta.outputs.labels }}
+        build-args: |
+          VERSION=${{ steps.commit.outputs.hash }}
+          COMMIT_HASH=${{ steps.commit.outputs.hash }}
+          BUILD_DATE=${{ steps.date.outputs.date }}
+
+    - name: Build and push crowdllama image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile.crowdllama
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: |
+          ghcr.io/${{ github.repository }}/crowdllama:latest
+          ghcr.io/${{ github.repository }}/crowdllama:${{ steps.commit.outputs.hash }}
         labels: ${{ steps.meta.outputs.labels }}
         build-args: |
           VERSION=${{ steps.commit.outputs.hash }}

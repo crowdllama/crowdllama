@@ -1,0 +1,56 @@
+# Build stage
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS builder
+
+# Install git and ca-certificates (needed for go mod download)
+RUN apk add --no-cache git ca-certificates
+
+# Set working directory
+WORKDIR /app
+
+# Copy go mod files
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build arguments for version information
+ARG VERSION=dev
+ARG COMMIT_HASH=unknown
+ARG BUILD_DATE=unknown
+ARG TARGETPLATFORM
+ARG BUILDPLATFORM
+
+# Build the crowdllama binary with version information
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo \
+    -ldflags "-X github.com/matiasinsaurralde/crowdllama/pkg/version.Version=${VERSION} \
+               -X github.com/matiasinsaurralde/crowdllama/pkg/version.CommitHash=${COMMIT_HASH} \
+               -X github.com/matiasinsaurralde/crowdllama/pkg/version.BuildDate=${BUILD_DATE}" \
+    -o crowdllama ./cmd/crowdllama
+
+# Final stage
+FROM alpine:latest
+
+# Install ca-certificates for HTTPS requests
+RUN apk --no-cache add ca-certificates
+
+# Create non-root user
+RUN addgroup -g 1001 -S crowdllama && \
+    adduser -u 1001 -S crowdllama -G crowdllama
+
+# Set working directory
+WORKDIR /app
+
+# Copy binary from builder stage
+COPY --from=builder /app/crowdllama .
+
+# Change ownership to non-root user
+RUN chown -R crowdllama:crowdllama /app
+
+# Switch to non-root user
+USER crowdllama
+
+# Run the crowdllama CLI
+ENTRYPOINT ["./crowdllama"] 
