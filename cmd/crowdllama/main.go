@@ -53,7 +53,8 @@ func main() {
 	// Execute the ollama CLI with our modifications:
 	if err := ollamaCmd.Execute(); err != nil {
 		logger.Error("CLI execution failed", zap.Error(err))
-		os.Exit(1)
+		// Don't use os.Exit here as it will prevent defer from running
+		return
 	}
 }
 
@@ -61,11 +62,8 @@ var networkStatusCmd = &cobra.Command{
 	Use:   "network-status",
 	Short: "Get the status of the network",
 	Long:  `Get the status of the CrowdLlama network and connected peers.`,
-	Run: func(cmd *cobra.Command, args []string) {
-		if err := runNetworkStatus(); err != nil {
-			logger.Error("Failed to get network status", zap.Error(err))
-			os.Exit(1)
-		}
+	Run: func(_ *cobra.Command, _ []string) {
+		runNetworkStatus()
 	},
 }
 
@@ -73,11 +71,8 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print the version information",
 	Long:  `Print detailed version information including commit hash, build date, and Go version.`,
-	Run: func(cmd *cobra.Command, args []string) {
-		if err := runVersion(); err != nil {
-			logger.Error("Failed to get version", zap.Error(err))
-			os.Exit(1)
-		}
+	Run: func(_ *cobra.Command, _ []string) {
+		runVersion()
 	},
 }
 
@@ -109,19 +104,16 @@ func setupLogging() error {
 	return nil
 }
 
-func runVersion() error {
+func runVersion() {
 	logger.Info("Displaying version information")
 	fmt.Println(version.String())
-	return nil
 }
 
-func runNetworkStatus() error {
+func runNetworkStatus() {
 	logger.Info("Checking network status")
 
 	// TODO: Implement actual network status checking
 	// For now, just display a placeholder message
 	logger.Info("Network status check completed", zap.String("status", "placeholder"))
 	fmt.Println("Network status: Placeholder - implementation pending")
-
-	return nil
 }
