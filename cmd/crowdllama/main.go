@@ -3,28 +3,26 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"net"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 
-	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/ollama/ollama/cmd"
 
 	"github.com/matiasinsaurralde/crowdllama/internal/keys"
 	"github.com/matiasinsaurralde/crowdllama/pkg/config"
 	"github.com/matiasinsaurralde/crowdllama/pkg/consumer"
 	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
+	"github.com/matiasinsaurralde/crowdllama/pkg/ipc"
 	"github.com/matiasinsaurralde/crowdllama/pkg/version"
 	"github.com/matiasinsaurralde/crowdllama/pkg/worker"
-
-	"github.com/ollama/ollama/cmd"
 )
 
 var (
@@ -35,9 +33,6 @@ var (
 	// Mode flags
 	workerMode bool
 	port       int
-
-	// IPC socket for Electron communication
-	crowdLlamaIPCSocket string
 )
 
 func main() {
@@ -139,11 +134,15 @@ func setupLogging() error {
 		logger.Info("Verbose mode enabled")
 	}
 
-	// Read IPC socket from environment
-	crowdLlamaIPCSocket = os.Getenv("CROWDLLAMA_SOCKET")
-	if crowdLlamaIPCSocket != "" {
-		logger.Info("IPC socket configured", zap.String("socket", crowdLlamaIPCSocket))
-		go startIPCServer()
+	// Read IPC socket from environment and start IPC server if configured
+	if socketPath := os.Getenv("CROWDLLAMA_SOCKET"); socketPath != "" {
+		logger.Info("IPC socket configured", zap.String("socket", socketPath))
+		ipcServer := ipc.NewServer(socketPath, logger)
+		go func() {
+			if err := ipcServer.Start(); err != nil {
+				logger.Error("Failed to start IPC server", zap.Error(err))
+			}
+		}()
 	} else {
 		logger.Info("No IPC socket configured, skipping IPC server")
 	}
@@ -314,126 +313,4 @@ func waitForShutdownSignal(c *consumer.Consumer, logger *zap.Logger) {
 	}
 
 	logger.Info("Consumer shutdown complete")
-}
-
-// IPCMessage represents a message structure for communication with Electron
-type IPCMessage struct {
-	Type    string      `json:"type"`
-	Payload interface{} `json:"payload"`
-	ID      string      `json:"id,omitempty"`
-}
-
-// startIPCServer starts a Unix domain socket server for IPC communication
-func startIPCServer() {
-	// Remove existing socket file if it exists
-	if err := os.Remove(crowdLlamaIPCSocket); err != nil && !os.IsNotExist(err) {
-		logger.Error("Failed to remove existing socket", zap.Error(err))
-		return
-	}
-
-	// Create Unix domain socket listener
-	listener, err := net.Listen("unix", crowdLlamaIPCSocket)
-	if err != nil {
-		logger.Error("Failed to create IPC socket", zap.Error(err))
-		return
-	}
-	defer func() {
-		if closeErr := listener.Close(); closeErr != nil {
-			logger.Error("Failed to close IPC listener", zap.Error(closeErr))
-		}
-	}()
-
-	logger.Info("IPC server started", zap.String("socket", crowdLlamaIPCSocket))
-
-	// Set socket permissions for Electron to access (0600 is most secure)
-	if err := os.Chmod(crowdLlamaIPCSocket, 0o600); err != nil {
-		logger.Error("Failed to set socket permissions", zap.Error(err))
-	}
-
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			logger.Error("Failed to accept IPC connection", zap.Error(err))
-			continue
-		}
-
-		go handleIPCConnection(conn)
-	}
-}
-
-// handleIPCConnection handles individual IPC connections
-func handleIPCConnection(conn net.Conn) {
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			logger.Error("Failed to close IPC connection", zap.Error(closeErr))
-		}
-	}()
-
-	logger.Info("IPC connection established", zap.String("remote", conn.RemoteAddr().String()))
-
-	buffer := make([]byte, 4096)
-	for {
-		n, err := conn.Read(buffer)
-		if err != nil {
-			// EOF is normal when client closes connection after sending message
-			if err.Error() == "EOF" {
-				logger.Info("IPC connection closed by client (EOF)")
-			} else {
-				logger.Error("Failed to read from IPC connection", zap.Error(err))
-			}
-			break
-		}
-
-		if n > 0 {
-			message := buffer[:n]
-			logger.Info("Received IPC message",
-				zap.String("message", string(message)),
-				zap.Int("length", n))
-
-			// Try to parse as JSON
-			var ipcMsg IPCMessage
-			if err := json.Unmarshal(message, &ipcMsg); err != nil {
-				logger.Warn("Failed to parse IPC message as JSON",
-					zap.Error(err),
-					zap.String("raw", string(message)))
-			} else {
-				logger.Info("Parsed IPC message",
-					zap.String("type", ipcMsg.Type),
-					zap.String("id", ipcMsg.ID),
-					zap.Any("payload", ipcMsg.Payload))
-			}
-
-			// Handle different message types
-			var response IPCMessage
-			switch ipcMsg.Type {
-			case "ping":
-				response = IPCMessage{
-					Type:    "pong",
-					Payload: "pong",
-					ID:      ipcMsg.ID,
-				}
-				logger.Info("Responding to ping with pong")
-			default:
-				// Echo back for other message types
-				response = IPCMessage{
-					Type:    "response",
-					Payload: "Message received",
-					ID:      ipcMsg.ID,
-				}
-			}
-
-			responseBytes, err := json.Marshal(response)
-			if err != nil {
-				logger.Error("Failed to marshal IPC response", zap.Error(err))
-				continue
-			}
-
-			if _, err := conn.Write(responseBytes); err != nil {
-				logger.Error("Failed to write IPC response", zap.Error(err))
-				break
-			}
-		}
-	}
-
-	logger.Info("IPC connection closed", zap.String("remote", conn.RemoteAddr().String()))
 }
