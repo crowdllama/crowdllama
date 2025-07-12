@@ -29,6 +29,7 @@ var (
 	cfg       *config.Configuration
 	logger    *zap.Logger
 	ollamaCmd *cobra.Command
+	ipcServer *ipc.Server
 
 	// Mode flags
 	workerMode bool
@@ -137,7 +138,7 @@ func setupLogging() error {
 	// Read IPC socket from environment and start IPC server if configured
 	if socketPath := os.Getenv("CROWDLLAMA_SOCKET"); socketPath != "" {
 		logger.Info("IPC socket configured", zap.String("socket", socketPath))
-		ipcServer := ipc.NewServer(socketPath, logger)
+		ipcServer = ipc.NewServer(socketPath, logger)
 		go func() {
 			if err := ipcServer.Start(); err != nil {
 				logger.Error("Failed to start IPC server", zap.Error(err))
@@ -222,6 +223,11 @@ func runWorkerMode() {
 		return
 	}
 
+	// Set the worker instance in IPC server if available
+	if ipcServer != nil {
+		ipcServer.SetWorkerInstance(w)
+	}
+
 	logger.Info("Worker initialized", zap.String("peer_id", w.Host.ID().String()))
 	logger.Info("Worker addresses", zap.Any("addresses", w.Host.Addrs()))
 
@@ -280,6 +286,11 @@ func runConsumerMode() {
 	if err != nil {
 		logger.Error("Failed to initialize consumer", zap.Error(err))
 		return
+	}
+
+	// Set the consumer instance in IPC server if available
+	if ipcServer != nil {
+		ipcServer.SetConsumerInstance(c)
 	}
 
 	// Start consumer services
