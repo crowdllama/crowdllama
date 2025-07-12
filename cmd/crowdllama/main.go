@@ -16,8 +16,9 @@ import (
 )
 
 var (
-	cfg    *config.Configuration
-	logger *zap.Logger
+	cfg       *config.Configuration
+	logger    *zap.Logger
+	ollamaCmd *cobra.Command
 )
 
 func main() {
@@ -33,7 +34,7 @@ func main() {
 	}()
 
 	// Initialize and customize the ollama CLI:
-	ollamaCmd := cmd.NewCLI()
+	ollamaCmd = cmd.NewCLI()
 	ollamaCmd.Root().Use = "crowdllama"
 	ollamaCmd.Root().Short = "CrowdLlama CLI - A distributed AI inference platform"
 	ollamaCmd.Root().Long = `CrowdLlama CLI provides a command-line interface for the CrowdLlama distributed AI inference platform.`
@@ -43,11 +44,21 @@ func main() {
 	// Add our custom commands
 	ollamaCmd.AddCommand(networkStatusCmd)
 	ollamaCmd.AddCommand(versionCmd)
+	ollamaCmd.AddCommand(startCmd)
+
+	// Hack: Rename existing start command to start_ollama and store reference
+	for _, command := range ollamaCmd.Commands() {
+		if command.Use == "serve" {
+			command.Use = "serve_ollama"
+			command.Short = "Start the Ollama server (renamed from serve)"
+			command.Aliases = nil // Remove all aliases, including 'start'
+			logger.Info("Found and renamed 'serve' command to 'serve_ollama'")
+		}
+	}
 
 	// Start ollama server in background
 	go func() {
-		logger.Info("Starting Ollama server in background")
-		ollamaCmd.Root().Run(ollamaCmd.Root(), []string{})
+		// Background server logic can be added here if needed
 	}()
 
 	// Execute the ollama CLI with our modifications:
@@ -73,6 +84,15 @@ var versionCmd = &cobra.Command{
 	Long:  `Print detailed version information including commit hash, build date, and Go version.`,
 	Run: func(_ *cobra.Command, _ []string) {
 		runVersion()
+	},
+}
+
+var startCmd = &cobra.Command{
+	Use:   "start",
+	Short: "Start the CrowdLlama platform",
+	Long:  `Start the CrowdLlama distributed AI inference platform.`,
+	Run: func(_ *cobra.Command, _ []string) {
+		runStart()
 	},
 }
 
@@ -116,4 +136,23 @@ func runNetworkStatus() {
 	// For now, just display a placeholder message
 	logger.Info("Network status check completed", zap.String("status", "placeholder"))
 	fmt.Println("Network status: Placeholder - implementation pending")
+}
+
+func runStart() {
+	logger.Info("Starting CrowdLlama platform")
+	fmt.Println("Hello world from CrowdLlama start command!")
+
+	// Prevent recursion if already running serve_ollama
+	for _, arg := range os.Args[1:] {
+		if arg == "serve_ollama" {
+			logger.Info("Already running serve_ollama, not re-invoking.")
+			return
+		}
+	}
+
+	// Simulate CLI args and execute serve_ollama
+	ollamaCmd.SetArgs([]string{"serve_ollama"})
+	if err := ollamaCmd.Execute(); err != nil {
+		logger.Error("Failed to execute serve_ollama command", zap.Error(err))
+	}
 }
