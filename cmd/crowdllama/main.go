@@ -2,15 +2,25 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 
+	"github.com/libp2p/go-libp2p/core/crypto"
+
+	"github.com/matiasinsaurralde/crowdllama/internal/keys"
 	"github.com/matiasinsaurralde/crowdllama/pkg/config"
+	"github.com/matiasinsaurralde/crowdllama/pkg/consumer"
+	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
 	"github.com/matiasinsaurralde/crowdllama/pkg/version"
+	"github.com/matiasinsaurralde/crowdllama/pkg/worker"
 
 	"github.com/ollama/ollama/cmd"
 )
@@ -19,6 +29,10 @@ var (
 	cfg       *config.Configuration
 	logger    *zap.Logger
 	ollamaCmd *cobra.Command
+
+	// Mode flags
+	workerMode bool
+	port       int
 )
 
 func main() {
@@ -46,6 +60,10 @@ func main() {
 	ollamaCmd.AddCommand(versionCmd)
 	ollamaCmd.AddCommand(startCmd)
 
+	// Add flags to start command
+	startCmd.Flags().BoolVar(&workerMode, "worker-mode", false, "Run in worker mode (default: consumer mode)")
+	startCmd.Flags().IntVar(&port, "port", consumer.DefaultHTTPPort, "HTTP server port (consumer mode only)")
+
 	// Hack: Rename existing start command to start_ollama and store reference
 	for _, command := range ollamaCmd.Commands() {
 		if command.Use == "serve" {
@@ -55,11 +73,6 @@ func main() {
 			logger.Info("Found and renamed 'serve' command to 'serve_ollama'")
 		}
 	}
-
-	// Start ollama server in background
-	go func() {
-		// Background server logic can be added here if needed
-	}()
 
 	// Execute the ollama CLI with our modifications:
 	if err := ollamaCmd.Execute(); err != nil {
@@ -91,8 +104,8 @@ var startCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start the CrowdLlama platform",
 	Long:  `Start the CrowdLlama distributed AI inference platform.`,
-	Run: func(_ *cobra.Command, _ []string) {
-		runStart()
+	Run: func(cmd *cobra.Command, args []string) {
+		runStart(cmd, args)
 	},
 }
 
@@ -138,9 +151,92 @@ func runNetworkStatus() {
 	fmt.Println("Network status: Placeholder - implementation pending")
 }
 
-func runStart() {
+func runStart(cobraCmd *cobra.Command, _ []string) {
 	logger.Info("Starting CrowdLlama platform")
-	fmt.Println("Hello world from CrowdLlama start command!")
+
+	// Get flags from Cobra command
+	workerMode, _ = cobraCmd.Flags().GetBool("worker-mode")
+	port, _ = cobraCmd.Flags().GetInt("port")
+
+	if workerMode {
+		logger.Info("Starting in WORKER mode")
+		runWorkerMode()
+	} else {
+		logger.Info("Starting in CONSUMER mode")
+		runConsumerMode()
+	}
+}
+
+// Common initialization logic for both worker and consumer
+func commonInit() (crypto.PrivKey, error) {
+	// Get private key based on mode
+	keyType := "consumer"
+	if workerMode {
+		keyType = "worker"
+	}
+
+	keyPath := cfg.KeyPath
+	if keyPath == "" {
+		defaultPath, err := keys.GetDefaultKeyPath(keyType)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get default key path: %w", err)
+		}
+		keyPath = defaultPath
+	}
+
+	keyManager := keys.NewKeyManager(keyPath, logger)
+	privKey, err := keyManager.GetOrCreatePrivateKey()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get or create private key: %w", err)
+	}
+
+	return privKey, nil
+}
+
+func runWorkerMode() {
+	privKey, err := commonInit()
+	if err != nil {
+		logger.Error("Failed to initialize worker", zap.Error(err))
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	w, err := worker.NewWorkerWithConfig(ctx, privKey, cfg)
+	if err != nil {
+		logger.Error("Failed to start worker", zap.Error(err))
+		return
+	}
+
+	logger.Info("Worker initialized", zap.String("peer_id", w.Host.ID().String()))
+	logger.Info("Worker addresses", zap.Any("addresses", w.Host.Addrs()))
+
+	// Setup worker metadata
+	w.SetupMetadataHandler()
+	w.StartMetadataUpdates()
+	w.AdvertiseModel(ctx, crowdllama.WorkerNamespace)
+
+	// Start metadata publisher
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := w.PublishMetadata(ctx); err != nil {
+					logger.Error("Failed to publish metadata", zap.Error(err))
+				} else {
+					logger.Info("Published metadata to DHT")
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	// Start Ollama server in worker mode
+	logger.Info("Starting Ollama server for worker mode...")
 
 	// Prevent recursion if already running serve_ollama
 	for _, arg := range os.Args[1:] {
@@ -155,4 +251,53 @@ func runStart() {
 	if err := ollamaCmd.Execute(); err != nil {
 		logger.Error("Failed to execute serve_ollama command", zap.Error(err))
 	}
+}
+
+func runConsumerMode() {
+	privKey, err := commonInit()
+	if err != nil {
+		logger.Error("Failed to initialize consumer", zap.Error(err))
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	c, err := consumer.NewConsumer(ctx, logger, privKey, cfg)
+	if err != nil {
+		logger.Error("Failed to initialize consumer", zap.Error(err))
+		return
+	}
+
+	// Start consumer services
+	c.StartBackgroundDiscovery()
+	logger.Info("Background worker discovery started")
+
+	go func() {
+		if err := c.StartHTTPServer(port); err != nil {
+			logger.Fatal("HTTP server failed", zap.Error(err))
+		}
+	}()
+
+	// Wait for shutdown signal
+	waitForShutdownSignal(c, logger)
+}
+
+func waitForShutdownSignal(c *consumer.Consumer, logger *zap.Logger) {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	<-sigCh
+
+	logger.Info("Shutting down consumer...")
+
+	c.StopBackgroundDiscovery()
+	logger.Info("Background discovery stopped")
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	if err := c.StopHTTPServer(shutdownCtx); err != nil {
+		logger.Error("Failed to shutdown HTTP server gracefully", zap.Error(err))
+	}
+
+	logger.Info("Consumer shutdown complete")
 }
