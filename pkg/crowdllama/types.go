@@ -20,7 +20,7 @@ const (
 	PeerMetadataPrefix = "/crowdllama/peer/"
 
 	// PeerNamespace is the namespace used for peer discovery in the DHT
-	PeerNamespace = "crowdllama-demo-namespace"
+	PeerNamespace = "crowdllama-ns"
 )
 
 // Resource represents a CrowdLlama resource (peer metadata)
