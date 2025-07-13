@@ -16,13 +16,13 @@ import (
 
 	"github.com/ollama/ollama/cmd"
 
+	"github.com/crowdllama/crowdllama/internal/discovery"
 	"github.com/crowdllama/crowdllama/internal/keys"
 	"github.com/crowdllama/crowdllama/pkg/config"
-	"github.com/crowdllama/crowdllama/pkg/consumer"
 	"github.com/crowdllama/crowdllama/pkg/crowdllama"
 	"github.com/crowdllama/crowdllama/pkg/ipc"
+	"github.com/crowdllama/crowdllama/pkg/peer"
 	"github.com/crowdllama/crowdllama/pkg/version"
-	"github.com/crowdllama/crowdllama/pkg/worker"
 )
 
 var (
@@ -63,7 +63,7 @@ func main() {
 
 	// Add flags to start command
 	startCmd.Flags().BoolVar(&workerMode, "worker-mode", false, "Run in worker mode (default: consumer mode)")
-	startCmd.Flags().IntVar(&port, "port", consumer.DefaultHTTPPort, "HTTP server port (consumer mode only)")
+	startCmd.Flags().IntVar(&port, "port", 9001, "HTTP server port (consumer mode only)")
 
 	// Hack: Rename existing start command to start_ollama and store reference
 	for _, command := range ollamaCmd.Commands() {
@@ -217,24 +217,24 @@ func runWorkerMode() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	w, err := worker.NewWorkerWithConfig(ctx, privKey, cfg)
+	p, err := peer.NewPeerWithConfig(ctx, privKey, cfg, true) // true for worker mode
 	if err != nil {
-		logger.Error("Failed to start worker", zap.Error(err))
+		logger.Error("Failed to start peer in worker mode", zap.Error(err))
 		return
 	}
 
-	// Set the worker instance in IPC server if available
+	// Set the peer instance in IPC server if available
 	if ipcServer != nil {
-		ipcServer.SetWorkerInstance(w)
+		ipcServer.SetWorkerInstance(p)
 	}
 
-	logger.Info("Worker initialized", zap.String("peer_id", w.Host.ID().String()))
-	logger.Info("Worker addresses", zap.Any("addresses", w.Host.Addrs()))
+	logger.Info("Peer initialized in worker mode", zap.String("peer_id", p.Host.ID().String()))
+	logger.Info("Peer addresses", zap.Any("addresses", p.Host.Addrs()))
 
-	// Setup worker metadata
-	w.SetupMetadataHandler()
-	w.StartMetadataUpdates()
-	w.AdvertiseModel(ctx, crowdllama.WorkerNamespace)
+	// Setup peer metadata
+	p.SetupMetadataHandler()
+	p.StartMetadataUpdates()
+	p.AdvertisePeer(ctx, crowdllama.PeerNamespace)
 
 	// Start metadata publisher
 	go func() {
@@ -243,7 +243,7 @@ func runWorkerMode() {
 		for {
 			select {
 			case <-ticker.C:
-				if err := w.PublishMetadata(ctx); err != nil {
+				if err := p.PublishMetadata(ctx); err != nil {
 					logger.Error("Failed to publish metadata", zap.Error(err))
 				} else {
 					logger.Info("Published metadata to DHT")
@@ -255,21 +255,23 @@ func runWorkerMode() {
 	}()
 
 	// Start Ollama server in worker mode
-	logger.Info("Starting Ollama server for worker mode...")
+	logger.Info("Starting Ollama server for worker mode")
 
-	// Prevent recursion if already running serve_ollama
-	for _, arg := range os.Args[1:] {
-		if arg == "serve_ollama" {
-			logger.Info("Already running serve_ollama, not re-invoking.")
-			return
-		}
-	}
-
-	// Simulate CLI args and execute serve_ollama
 	ollamaCmd.SetArgs([]string{"serve_ollama"})
-	if err := ollamaCmd.Execute(); err != nil {
-		logger.Error("Failed to execute serve_ollama command", zap.Error(err))
-	}
+
+	go func() {
+		if err := ollamaCmd.Execute(); err != nil {
+			logger.Error("Failed to execute serve_ollama command", zap.Error(err))
+		}
+	}()
+
+	// Start peer statistics logging
+	startPeerStatsLogging(ctx, p, logger)
+
+	// Start peer discovery
+	startPeerDiscovery(ctx, p, logger)
+
+	waitForShutdownSignal(p, logger)
 }
 
 func runConsumerMode() {
@@ -282,46 +284,157 @@ func runConsumerMode() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	c, err := consumer.NewConsumer(ctx, logger, privKey, cfg)
+	p, err := peer.NewPeerWithConfig(ctx, privKey, cfg, false) // false for consumer mode
 	if err != nil {
-		logger.Error("Failed to initialize consumer", zap.Error(err))
+		logger.Error("Failed to start peer in consumer mode", zap.Error(err))
 		return
 	}
 
-	// Set the consumer instance in IPC server if available
-	if ipcServer != nil {
-		ipcServer.SetConsumerInstance(c)
-	}
+	logger.Info("Peer initialized in consumer mode", zap.String("peer_id", p.Host.ID().String()))
+	logger.Info("Peer addresses", zap.Any("addresses", p.Host.Addrs()))
 
-	// Start consumer services
-	c.StartBackgroundDiscovery()
-	logger.Info("Background worker discovery started")
+	// Setup peer metadata
+	p.SetupMetadataHandler()
+	p.StartMetadataUpdates()
+	p.AdvertisePeer(ctx, crowdllama.PeerNamespace)
 
+	// Start metadata publisher
 	go func() {
-		if err := c.StartHTTPServer(port); err != nil {
-			logger.Fatal("HTTP server failed", zap.Error(err))
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := p.PublishMetadata(ctx); err != nil {
+					logger.Error("Failed to publish metadata", zap.Error(err))
+				} else {
+					logger.Info("Published metadata to DHT")
+				}
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 
+	// Start peer statistics logging
+	startPeerStatsLogging(ctx, p, logger)
+
+	// Start peer discovery
+	startPeerDiscovery(ctx, p, logger)
+
 	// Wait for shutdown signal
-	waitForShutdownSignal(c, logger)
+	waitForShutdownSignal(p, logger)
 }
 
-func waitForShutdownSignal(c *consumer.Consumer, logger *zap.Logger) {
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
+// startPeerStatsLogging starts periodic logging of peer statistics
+func startPeerStatsLogging(ctx context.Context, p *peer.Peer, logger *zap.Logger) {
+	go func() {
+		statsTicker := time.NewTicker(10 * time.Second)
+		defer statsTicker.Stop()
+		for {
+			select {
+			case <-statsTicker.C:
+				logPeerStats(p, logger)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
 
-	logger.Info("Shutting down consumer...")
+// startPeerDiscovery starts periodic peer discovery and logs new peer discoveries
+func startPeerDiscovery(ctx context.Context, p *peer.Peer, logger *zap.Logger) {
+	go func() {
+		discoveryTicker := time.NewTicker(15 * time.Second)
+		defer discoveryTicker.Stop()
 
-	c.StopBackgroundDiscovery()
-	logger.Info("Background discovery stopped")
+		// Track previously discovered peers to detect new ones
+		knownPeers := make(map[string]bool)
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
-	if err := c.StopHTTPServer(shutdownCtx); err != nil {
-		logger.Error("Failed to shutdown HTTP server gracefully", zap.Error(err))
+		for {
+			select {
+			case <-discoveryTicker.C:
+				discoveredPeers, err := discovery.DiscoverPeers(ctx, p.DHT, logger, nil)
+				if err != nil {
+					logger.Error("Failed to discover peers", zap.Error(err))
+					continue
+				}
+
+				// Check for new peers
+				for _, peer := range discoveredPeers {
+					peerID := peer.PeerID
+					if !knownPeers[peerID] {
+						// This is a newly discovered peer
+						peerType := "consumer"
+						if peer.WorkerMode {
+							peerType = "worker"
+						}
+
+						logger.Info("Discovered new peer",
+							zap.String("peer_id", peerID),
+							zap.String("peer_type", peerType),
+							zap.String("gpu_model", peer.GPUModel),
+							zap.Int("vram_gb", peer.VRAMGB),
+							zap.Float64("tokens_throughput", peer.TokensThroughput),
+							zap.Strings("supported_models", peer.SupportedModels))
+
+						knownPeers[peerID] = true
+					}
+				}
+
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
+// logPeerStats logs current peer statistics including discovered peers
+func logPeerStats(p *peer.Peer, logger *zap.Logger) {
+	// Convert multiaddrs to strings for logging
+	addrs := p.Host.Addrs()
+	addrStrings := make([]string, len(addrs))
+	for i, addr := range addrs {
+		addrStrings[i] = addr.String()
 	}
 
-	logger.Info("Consumer shutdown complete")
+	// Discover peers to get current network statistics
+	discoveredPeers, err := discovery.DiscoverPeers(context.Background(), p.DHT, logger, nil)
+	if err != nil {
+		logger.Error("Failed to discover peers for statistics", zap.Error(err))
+		return
+	}
+
+	// Count worker and consumer peers
+	workerPeers := 0
+	consumerPeers := 0
+	for _, peer := range discoveredPeers {
+		if peer.WorkerMode {
+			workerPeers++
+		} else {
+			consumerPeers++
+		}
+	}
+
+	totalPeers := len(discoveredPeers)
+
+	logger.Info("Peer statistics",
+		zap.String("peer_id", p.Host.ID().String()),
+		zap.Bool("worker_mode", p.WorkerMode),
+		zap.Strings("peer_addresses", addrStrings),
+		zap.Int("total_peers", totalPeers),
+		zap.Int("worker_peers", workerPeers),
+		zap.Int("consumer_peers", consumerPeers))
+}
+
+func waitForShutdownSignal(p *peer.Peer, logger *zap.Logger) {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	logger.Info("Peer running. Press Ctrl+C to exit.")
+	<-sigCh
+
+	logger.Info("Shutdown signal received, stopping peer...")
+	p.StopMetadataUpdates()
+	logger.Info("Peer stopped")
 }
