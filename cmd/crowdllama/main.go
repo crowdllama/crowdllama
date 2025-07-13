@@ -20,6 +20,7 @@ import (
 	"github.com/crowdllama/crowdllama/internal/keys"
 	"github.com/crowdllama/crowdllama/pkg/config"
 	"github.com/crowdllama/crowdllama/pkg/crowdllama"
+	"github.com/crowdllama/crowdllama/pkg/gateway"
 	"github.com/crowdllama/crowdllama/pkg/ipc"
 	"github.com/crowdllama/crowdllama/pkg/peer"
 	"github.com/crowdllama/crowdllama/pkg/version"
@@ -217,11 +218,14 @@ func runWorkerMode() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	p, err := peer.NewPeerWithConfig(ctx, privKey, cfg, true) // true for worker mode
+	p, err := peer.NewPeerWithConfig(ctx, privKey, cfg, true, logger) // true for worker mode
 	if err != nil {
 		logger.Error("Failed to start peer in worker mode", zap.Error(err))
 		return
 	}
+
+	// Start the peer manager
+	p.PeerManager.Start()
 
 	// Set the peer instance in IPC server if available
 	if ipcServer != nil {
@@ -284,11 +288,28 @@ func runConsumerMode() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	p, err := peer.NewPeerWithConfig(ctx, privKey, cfg, false) // false for consumer mode
+	// Create peer for consumer mode
+	p, err := peer.NewPeerWithConfig(ctx, privKey, cfg, false, logger) // false for consumer mode
 	if err != nil {
 		logger.Error("Failed to start peer in consumer mode", zap.Error(err))
 		return
 	}
+
+	// Start the peer manager
+	p.PeerManager.Start()
+
+	// Create gateway and set its peer manager
+	g, err := gateway.NewGateway(ctx, logger, privKey, cfg)
+	if err != nil {
+		logger.Error("Failed to start gateway", zap.Error(err))
+		return
+	}
+
+	// Set the gateway's peer manager to use the peer's manager
+	g.SetPeerManager(p.PeerManager)
+
+	// Set the gateway in the peer
+	p.Gateway = g
 
 	logger.Info("Peer initialized in consumer mode", zap.String("peer_id", p.Host.ID().String()))
 	logger.Info("Peer addresses", zap.Any("addresses", p.Host.Addrs()))
@@ -316,6 +337,13 @@ func runConsumerMode() {
 		}
 	}()
 
+	// Start HTTP server in a goroutine
+	go func() {
+		if err := g.StartHTTPServer(port); err != nil {
+			logger.Error("Failed to start HTTP server", zap.Error(err))
+		}
+	}()
+
 	// Start peer statistics logging
 	startPeerStatsLogging(ctx, p, logger)
 
@@ -324,6 +352,12 @@ func runConsumerMode() {
 
 	// Wait for shutdown signal
 	waitForShutdownSignal(p, logger)
+
+	// Stop background discovery and HTTP server
+	g.StopBackgroundDiscovery()
+	if err := g.StopHTTPServer(ctx); err != nil {
+		logger.Error("Failed to stop HTTP server", zap.Error(err))
+	}
 }
 
 // startPeerStatsLogging starts periodic logging of peer statistics
@@ -354,13 +388,13 @@ func startPeerDiscovery(ctx context.Context, p *peer.Peer, logger *zap.Logger) {
 		for {
 			select {
 			case <-discoveryTicker.C:
-				discoveredPeers, err := discovery.DiscoverPeers(ctx, p.DHT, logger, nil)
+				discoveredPeers, err := discovery.DiscoverPeers(ctx, p.DHT, logger, p.PeerManager)
 				if err != nil {
 					logger.Error("Failed to discover peers", zap.Error(err))
 					continue
 				}
 
-				// Check for new peers
+				// Check for new peers and add them to the peer manager
 				for _, peer := range discoveredPeers {
 					peerID := peer.PeerID
 					if !knownPeers[peerID] {
@@ -378,6 +412,8 @@ func startPeerDiscovery(ctx context.Context, p *peer.Peer, logger *zap.Logger) {
 							zap.Float64("tokens_throughput", peer.TokensThroughput),
 							zap.Strings("supported_models", peer.SupportedModels))
 
+						// Add the peer to the peer manager
+						p.PeerManager.AddOrUpdatePeer(peerID, peer)
 						knownPeers[peerID] = true
 					}
 				}
@@ -398,33 +434,16 @@ func logPeerStats(p *peer.Peer, logger *zap.Logger) {
 		addrStrings[i] = addr.String()
 	}
 
-	// Discover peers to get current network statistics
-	discoveredPeers, err := discovery.DiscoverPeers(context.Background(), p.DHT, logger, nil)
-	if err != nil {
-		logger.Error("Failed to discover peers for statistics", zap.Error(err))
-		return
-	}
-
-	// Count worker and consumer peers
-	workerPeers := 0
-	consumerPeers := 0
-	for _, peer := range discoveredPeers {
-		if peer.WorkerMode {
-			workerPeers++
-		} else {
-			consumerPeers++
-		}
-	}
-
-	totalPeers := len(discoveredPeers)
+	// Get peer statistics from the peer manager
+	stats := p.PeerManager.GetPeerStatistics()
 
 	logger.Info("Peer statistics",
 		zap.String("peer_id", p.Host.ID().String()),
 		zap.Bool("worker_mode", p.WorkerMode),
 		zap.Strings("peer_addresses", addrStrings),
-		zap.Int("total_peers", totalPeers),
-		zap.Int("worker_peers", workerPeers),
-		zap.Int("consumer_peers", consumerPeers))
+		zap.Int("total_peers", stats.TotalPeers),
+		zap.Int("worker_peers", stats.WorkerPeers),
+		zap.Int("consumer_peers", stats.ConsumerPeers))
 }
 
 func waitForShutdownSignal(p *peer.Peer, logger *zap.Logger) {
