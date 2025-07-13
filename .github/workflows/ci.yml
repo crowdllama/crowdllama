@@ -107,8 +107,6 @@ jobs:
         GOOS: ${{ matrix.goos }}
         GOARCH: ${{ matrix.goarch }}
       run: |
-        go build -v -o bin/consumer-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/consumer
-        go build -v -o bin/worker-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/worker
         go build -v -o bin/dht-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/dht
         go build -v -o bin/crowdllama-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/crowdllama
 
@@ -150,8 +148,6 @@ jobs:
       uses: docker/metadata-action@v5
       with:
         images: |
-          ghcr.io/crowdllama/consumer
-          ghcr.io/crowdllama/worker
           ghcr.io/crowdllama/dht
           ghcr.io/crowdllama/crowdllama
         tags: |
@@ -168,38 +164,6 @@ jobs:
     - name: Get build date
       id: date
       run: echo "date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
-
-    - name: Build and push consumer image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./Dockerfile.consumer
-        platforms: linux/amd64
-        push: true
-        tags: |
-          ghcr.io/crowdllama/consumer:latest
-          ghcr.io/crowdllama/consumer:${{ steps.commit.outputs.hash }}
-        labels: ${{ steps.meta.outputs.labels }}
-        build-args: |
-          VERSION=${{ steps.commit.outputs.hash }}
-          COMMIT_HASH=${{ steps.commit.outputs.hash }}
-          BUILD_DATE=${{ steps.date.outputs.date }}
-
-    - name: Build and push worker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./Dockerfile.worker
-        platforms: linux/amd64
-        push: true
-        tags: |
-          ghcr.io/crowdllama/worker:latest
-          ghcr.io/crowdllama/worker:${{ steps.commit.outputs.hash }}
-        labels: ${{ steps.meta.outputs.labels }}
-        build-args: |
-          VERSION=${{ steps.commit.outputs.hash }}
-          COMMIT_HASH=${{ steps.commit.outputs.hash }}
-          BUILD_DATE=${{ steps.date.outputs.date }}
 
     - name: Build and push dht image
       uses: docker/build-push-action@v5
