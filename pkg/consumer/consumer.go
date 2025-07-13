@@ -376,13 +376,13 @@ func (c *Consumer) ListKnownPeersLoop() {
 	}()
 }
 
-// DiscoverWorkers searches for available workers in the DHT
-func (c *Consumer) DiscoverWorkers(ctx context.Context) ([]*crowdllama.Resource, error) {
-	workers, err := discovery.DiscoverWorkers(ctx, c.DHT, c.logger, c.peerManager)
+// DiscoverPeers searches for available peers in the DHT
+func (c *Consumer) DiscoverPeers(ctx context.Context) ([]*crowdllama.Resource, error) {
+	peers, err := discovery.DiscoverPeers(ctx, c.DHT, c.logger, c.peerManager)
 	if err != nil {
-		return nil, fmt.Errorf("discover workers: %w", err)
+		return nil, fmt.Errorf("discover peers: %w", err)
 	}
-	return workers, nil
+	return peers, nil
 }
 
 // FindBestWorker finds the best available worker based on criteria
@@ -537,7 +537,7 @@ func (c *Consumer) runDiscovery() {
 	ctx, cancel := context.WithTimeout(c.discoveryCtx, 10*time.Second)
 	defer cancel()
 
-	workers, err := c.DiscoverWorkers(ctx)
+	peers, err := c.DiscoverPeers(ctx)
 	if err != nil {
 		c.logger.Warn("Background discovery failed", zap.Error(err))
 		return
@@ -545,25 +545,25 @@ func (c *Consumer) runDiscovery() {
 
 	updatedCount := 0
 	skippedCount := 0
-	for _, worker := range workers {
-		// Check if this worker is already marked as unhealthy or recently removed
-		if c.peerManager.IsPeerUnhealthy(worker.PeerID) {
-			c.logger.Debug("Skipping unhealthy worker",
-				zap.String("worker_peer_id", worker.PeerID))
+	for _, peer := range peers {
+		// Check if this peer is already marked as unhealthy or recently removed
+		if c.peerManager.IsPeerUnhealthy(peer.PeerID) {
+			c.logger.Debug("Skipping unhealthy peer",
+				zap.String("peer_id", peer.PeerID))
 			skippedCount++
 			continue
 		}
 
-		// Additional check: skip workers with old metadata
-		if time.Since(worker.LastUpdated) > c.peerManager.GetConfig().MaxMetadataAge {
-			c.logger.Debug("Skipping worker with old metadata",
-				zap.String("worker_peer_id", worker.PeerID),
-				zap.Time("last_updated", worker.LastUpdated))
+		// Additional check: skip peers with old metadata
+		if time.Since(peer.LastUpdated) > c.peerManager.GetConfig().MaxMetadataAge {
+			c.logger.Debug("Skipping peer with old metadata",
+				zap.String("peer_id", peer.PeerID),
+				zap.Time("last_updated", peer.LastUpdated))
 			skippedCount++
 			continue
 		}
 
-		c.peerManager.AddOrUpdatePeer(worker.PeerID, worker)
+		c.peerManager.AddOrUpdatePeer(peer.PeerID, peer)
 		updatedCount++
 	}
 
