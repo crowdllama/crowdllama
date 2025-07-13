@@ -20,9 +20,12 @@ import (
 	"github.com/multiformats/go-multihash"
 
 	"github.com/crowdllama/crowdllama/internal/discovery"
+	"github.com/crowdllama/crowdllama/internal/peermanager"
 	"github.com/crowdllama/crowdllama/pkg/config"
 	"github.com/crowdllama/crowdllama/pkg/crowdllama"
+	"github.com/crowdllama/crowdllama/pkg/gateway"
 	"github.com/crowdllama/crowdllama/pkg/version"
+	"go.uber.org/zap"
 )
 
 // InferenceProtocol is the protocol identifier for inference requests
@@ -72,6 +75,12 @@ type Peer struct {
 	Config     *config.Configuration
 	WorkerMode bool // true if this peer is in worker mode
 
+	// Peer management
+	PeerManager *peermanager.Manager
+
+	// Gateway (only set in consumer mode)
+	Gateway *gateway.Gateway
+
 	// Metadata update management
 	metadataCtx    context.Context
 	metadataCancel context.CancelFunc
@@ -90,6 +99,7 @@ func NewPeerWithConfig(
 	privKey crypto.PrivKey,
 	cfg *config.Configuration,
 	workerMode bool,
+	logger *zap.Logger,
 ) (*Peer, error) {
 	h, kadDHT, err := discovery.NewHostAndDHT(ctx, privKey)
 	if err != nil {
@@ -119,12 +129,26 @@ func NewPeerWithConfig(
 	// Create advertising context for managing advertising
 	advertisingCtx, advertisingCancel := context.WithCancel(ctx)
 
+	// Initialize peer manager
+	peerManagerConfig := peermanager.DefaultConfig()
+	if os.Getenv("CROWDLLAMA_TEST_MODE") == "1" {
+		peerManagerConfig = &peermanager.Config{
+			StalePeerTimeout:    30 * time.Second, // Shorter for testing
+			HealthCheckInterval: 5 * time.Second,
+			MaxFailedAttempts:   2,
+			BackoffBase:         5 * time.Second,
+			MetadataTimeout:     2 * time.Second,
+			MaxMetadataAge:      30 * time.Second,
+		}
+	}
+
 	peer := &Peer{
 		Host:              h,
 		DHT:               kadDHT,
 		Metadata:          metadata,
 		Config:            cfg,
 		WorkerMode:        workerMode,
+		PeerManager:       peermanager.NewManager(ctx, h, logger, peerManagerConfig),
 		metadataCtx:       metadataCtx,
 		metadataCancel:    metadataCancel,
 		advertisingCtx:    advertisingCtx,
@@ -141,8 +165,8 @@ func NewPeerWithConfig(
 }
 
 // NewPeer creates a new peer instance
-func NewPeer(ctx context.Context, privKey crypto.PrivKey, cfg *config.Configuration, workerMode bool) (*Peer, error) {
-	return NewPeerWithConfig(ctx, privKey, cfg, workerMode)
+func NewPeer(ctx context.Context, privKey crypto.PrivKey, cfg *config.Configuration, workerMode bool, logger *zap.Logger) (*Peer, error) {
+	return NewPeerWithConfig(ctx, privKey, cfg, workerMode, logger)
 }
 
 // handleInferenceRequest processes an inference request from a consumer
