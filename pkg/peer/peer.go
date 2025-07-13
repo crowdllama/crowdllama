@@ -349,7 +349,13 @@ func (p *Peer) UpdateMetadata() error {
 		p.Metadata.LastUpdated = time.Now()
 		p.Metadata.Version = version.CommitHash // Set the CrowdLlama version
 
-		p.logger.Debug("Updated worker peer metadata", zap.Strings("models", models), zap.Float64("throughput", tokensThroughput), zap.Int("vram", vramGB), zap.Float64("load", load), zap.String("gpu", gpuModel), zap.String("version", p.Metadata.Version))
+		p.logger.Debug("Updated worker peer metadata",
+			zap.Strings("models", models),
+			zap.Float64("throughput", tokensThroughput),
+			zap.Int("vram", vramGB),
+			zap.Float64("load", load),
+			zap.String("gpu", gpuModel),
+			zap.String("version", p.Metadata.Version))
 	} else {
 		// Consumer mode: empty resource advertisement
 		p.Metadata.SupportedModels = []string{}
@@ -528,7 +534,7 @@ func (p *Peer) IsDHTConnected() bool {
 // AttemptBootstrapReconnection attempts to reconnect to bootstrap peers
 func (p *Peer) AttemptBootstrapReconnection(ctx context.Context) error {
 	if len(p.bootstrapPeers) > 0 {
-		return discovery.BootstrapDHTWithPeers(ctx, p.Host, p.DHT, p.bootstrapPeers, p.logger)
+		return fmt.Errorf("bootstrap DHT with peers: %w", discovery.BootstrapDHTWithPeers(ctx, p.Host, p.DHT, p.bootstrapPeers, p.logger))
 	}
-	return discovery.BootstrapDHT(ctx, p.Host, p.DHT, p.logger)
+	return fmt.Errorf("bootstrap DHT: %w", discovery.BootstrapDHT(ctx, p.Host, p.DHT, p.logger))
 }

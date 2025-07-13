@@ -509,7 +509,7 @@ func stepWaitForConsumerDiscoveryByDHT(t *testing.T, dhtServer *dht.Server, cons
 	t.Fatalf("Consumer not discovered by DHT within %v", timeout)
 }
 
-func stepSendAndValidateRequest(ctx context.Context, t *testing.T, consumerPort int) {
+func stepSendAndValidateRequest(_ context.Context, t *testing.T, consumerPort int) {
 	t.Helper()
 
 	// Wait a moment for the server to be ready
@@ -538,7 +538,11 @@ func stepSendAndValidateRequest(ctx context.Context, t *testing.T, consumerPort 
 	if err != nil {
 		t.Fatalf("Failed to send request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Logf("Warning: failed to close response body: %v", err)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -604,6 +608,7 @@ func TestMockOllamaServer(t *testing.T) {
 }
 
 func setupMockOllamaServer(t *testing.T) *MockOllamaServer {
+	t.Helper()
 	port := 11435
 	mockOllama := NewMockOllamaServer(port)
 
@@ -620,6 +625,7 @@ func setupMockOllamaServer(t *testing.T) *MockOllamaServer {
 }
 
 func shutdownMockOllamaServer(t *testing.T, mockOllama *MockOllamaServer) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -629,6 +635,7 @@ func shutdownMockOllamaServer(t *testing.T, mockOllama *MockOllamaServer) {
 }
 
 func testMockOllamaRequest(t *testing.T, mockOllama *MockOllamaServer) {
+	t.Helper()
 	requestBody := map[string]interface{}{
 		"model": "llama3.2",
 		"messages": []map[string]string{
@@ -650,7 +657,11 @@ func testMockOllamaRequest(t *testing.T, mockOllama *MockOllamaServer) {
 	if err != nil {
 		t.Fatalf("Failed to send request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Logf("Warning: failed to close response body: %v", err)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -666,6 +677,7 @@ func testMockOllamaRequest(t *testing.T, mockOllama *MockOllamaServer) {
 }
 
 func validateMockOllamaResponse(t *testing.T, response *MockOllamaResponse) {
+	t.Helper()
 	if response.Model != "llama3.2" {
 		t.Errorf("Expected model 'llama3.2', got '%s'", response.Model)
 	}

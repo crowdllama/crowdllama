@@ -45,7 +45,7 @@ const (
 )
 
 // NewHostAndDHT creates a libp2p host with DHT
-func NewHostAndDHT(ctx context.Context, privKey crypto.PrivKey, logger *zap.Logger) (host.Host, *dht.IpfsDHT, error) {
+func NewHostAndDHT(ctx context.Context, privKey crypto.PrivKey, _ *zap.Logger) (host.Host, *dht.IpfsDHT, error) {
 	libp2pOpts := []libp2p.Option{
 		libp2p.ListenAddrStrings(defaultListenAddrs...),
 		libp2p.Identity(privKey),

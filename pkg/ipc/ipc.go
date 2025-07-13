@@ -471,7 +471,12 @@ func (s *Server) sendHTTPRequest(url string, requestBody map[string]interface{})
 	if err != nil {
 		return "", fmt.Errorf("failed to send HTTP request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			// Log error but don't fail the operation
+			fmt.Printf("Warning: failed to close response body: %v\n", closeErr)
+		}
+	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -486,7 +491,7 @@ func (s *Server) sendHTTPRequest(url string, requestBody map[string]interface{})
 }
 
 // sendPromptToConsumer sends a prompt to the consumer (placeholder)
-func (s *Server) sendPromptToConsumer(prompt, model string) (string, error) {
+func (s *Server) sendPromptToConsumer(_, _ string) (string, error) {
 	// This would send the prompt to the consumer's HTTP server
 	// For now, return a placeholder response
 	return "Consumer prompt handling not yet implemented", nil
