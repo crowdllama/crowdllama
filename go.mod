@@ -1,4 +1,4 @@
-module github.com/matiasinsaurralde/crowdllama
+module github.com/crowdllama/crowdllama
 
 go 1.24.4
 

@@ -76,4 +76,4 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/matiasinsaurralde/crowdllama
+        - github.com/crowdllama/crowdllama

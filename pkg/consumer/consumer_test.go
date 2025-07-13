@@ -7,7 +7,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"go.uber.org/zap"
 
-	"github.com/matiasinsaurralde/crowdllama/pkg/config"
+	"github.com/crowdllama/crowdllama/pkg/config"
 )
 
 func TestWorkerHealthManagement(t *testing.T) {

@@ -16,13 +16,13 @@ import (
 
 	"github.com/ollama/ollama/cmd"
 
-	"github.com/matiasinsaurralde/crowdllama/internal/keys"
-	"github.com/matiasinsaurralde/crowdllama/pkg/config"
-	"github.com/matiasinsaurralde/crowdllama/pkg/consumer"
-	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
-	"github.com/matiasinsaurralde/crowdllama/pkg/ipc"
-	"github.com/matiasinsaurralde/crowdllama/pkg/version"
-	"github.com/matiasinsaurralde/crowdllama/pkg/worker"
+	"github.com/crowdllama/crowdllama/internal/keys"
+	"github.com/crowdllama/crowdllama/pkg/config"
+	"github.com/crowdllama/crowdllama/pkg/consumer"
+	"github.com/crowdllama/crowdllama/pkg/crowdllama"
+	"github.com/crowdllama/crowdllama/pkg/ipc"
+	"github.com/crowdllama/crowdllama/pkg/version"
+	"github.com/crowdllama/crowdllama/pkg/worker"
 )
 
 var (

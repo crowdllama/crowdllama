@@ -12,11 +12,11 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/crypto"
 
-	"github.com/matiasinsaurralde/crowdllama/internal/keys"
-	"github.com/matiasinsaurralde/crowdllama/pkg/config"
-	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
-	"github.com/matiasinsaurralde/crowdllama/pkg/version"
-	"github.com/matiasinsaurralde/crowdllama/pkg/worker"
+	"github.com/crowdllama/crowdllama/internal/keys"
+	"github.com/crowdllama/crowdllama/pkg/config"
+	"github.com/crowdllama/crowdllama/pkg/crowdllama"
+	"github.com/crowdllama/crowdllama/pkg/version"
+	"github.com/crowdllama/crowdllama/pkg/worker"
 )
 
 func main() {

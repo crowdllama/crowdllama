@@ -11,7 +11,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"go.uber.org/zap"
 
-	"github.com/matiasinsaurralde/crowdllama/pkg/dht"
+	"github.com/crowdllama/crowdllama/pkg/dht"
 )
 
 // CreateIsolatedTestDHT starts a DHT server on a unique port and returns the server and its bootstrap address.

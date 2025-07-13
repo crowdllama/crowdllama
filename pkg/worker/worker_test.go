@@ -8,9 +8,9 @@ import (
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"go.uber.org/zap"
 
-	"github.com/matiasinsaurralde/crowdllama/pkg/config"
-	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
-	"github.com/matiasinsaurralde/crowdllama/pkg/testhelpers"
+	"github.com/crowdllama/crowdllama/pkg/config"
+	"github.com/crowdllama/crowdllama/pkg/crowdllama"
+	"github.com/crowdllama/crowdllama/pkg/testhelpers"
 )
 
 func TestUpdateMetadata(t *testing.T) {

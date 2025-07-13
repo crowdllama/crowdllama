@@ -11,7 +11,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"go.uber.org/zap"
 
-	"github.com/matiasinsaurralde/crowdllama/internal/keys"
+	"github.com/crowdllama/crowdllama/internal/keys"
 )
 
 func TestNewDHTServer(t *testing.T) {

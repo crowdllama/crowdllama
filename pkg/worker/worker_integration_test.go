@@ -12,10 +12,10 @@ import (
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"go.uber.org/zap"
 
-	"github.com/matiasinsaurralde/crowdllama/internal/discovery"
-	"github.com/matiasinsaurralde/crowdllama/internal/keys"
-	"github.com/matiasinsaurralde/crowdllama/pkg/config"
-	"github.com/matiasinsaurralde/crowdllama/pkg/dht"
+	"github.com/crowdllama/crowdllama/internal/discovery"
+	"github.com/crowdllama/crowdllama/internal/keys"
+	"github.com/crowdllama/crowdllama/pkg/config"
+	"github.com/crowdllama/crowdllama/pkg/dht"
 )
 
 // getRandomPort returns a random available port

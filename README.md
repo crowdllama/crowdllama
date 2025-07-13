@@ -1,6 +1,6 @@
 # CrowdLlama
 
-[![CI](https://github.com/matiasinsaurralde/crowdllama/actions/workflows/ci.yml/badge.svg)](https://github.com/matiasinsaurralde/crowdllama/actions/workflows/ci.yml)
+[![CI](https://github.com/crowdllama/crowdllama/actions/workflows/ci.yml/badge.svg)](https://github.com/crowdllama/crowdllama/actions/workflows/ci.yml)
 
 <img src="image.png" alt="CrowdLlama" width="50%">
 
@@ -19,7 +19,7 @@ CrowdLlama is a distributed system that leverages the open-source [Ollama projec
 ## Getting Started
 1. Clone the repository:
    ```sh
-   git clone https://github.com/matiasinsaurralde/crowdllama.git
+   git clone https://github.com/crowdllama/crowdllama.git
    cd crowdllama
    ```
 2. Build the components:

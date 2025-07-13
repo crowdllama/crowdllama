@@ -13,10 +13,10 @@ import (
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"go.uber.org/zap"
 
-	"github.com/matiasinsaurralde/crowdllama/internal/keys"
-	"github.com/matiasinsaurralde/crowdllama/pkg/config"
-	"github.com/matiasinsaurralde/crowdllama/pkg/dht"
-	"github.com/matiasinsaurralde/crowdllama/pkg/version"
+	"github.com/crowdllama/crowdllama/internal/keys"
+	"github.com/crowdllama/crowdllama/pkg/config"
+	"github.com/crowdllama/crowdllama/pkg/dht"
+	"github.com/crowdllama/crowdllama/pkg/version"
 )
 
 func main() {

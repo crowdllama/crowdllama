@@ -21,7 +21,7 @@ import (
 	"github.com/multiformats/go-multihash"
 	"go.uber.org/zap"
 
-	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
+	"github.com/crowdllama/crowdllama/pkg/crowdllama"
 )
 
 // advertiseInterval is the interval at which the model is advertised to the DHT:

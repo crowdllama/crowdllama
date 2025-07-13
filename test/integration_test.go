@@ -19,13 +19,13 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"go.uber.org/zap"
 
-	"github.com/matiasinsaurralde/crowdllama/internal/discovery"
-	"github.com/matiasinsaurralde/crowdllama/internal/keys"
-	"github.com/matiasinsaurralde/crowdllama/pkg/config"
-	consumerpkg "github.com/matiasinsaurralde/crowdllama/pkg/consumer"
-	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
-	"github.com/matiasinsaurralde/crowdllama/pkg/dht"
-	workerpkg "github.com/matiasinsaurralde/crowdllama/pkg/worker"
+	"github.com/crowdllama/crowdllama/internal/discovery"
+	"github.com/crowdllama/crowdllama/internal/keys"
+	"github.com/crowdllama/crowdllama/pkg/config"
+	consumerpkg "github.com/crowdllama/crowdllama/pkg/consumer"
+	"github.com/crowdllama/crowdllama/pkg/crowdllama"
+	"github.com/crowdllama/crowdllama/pkg/dht"
+	workerpkg "github.com/crowdllama/crowdllama/pkg/worker"
 )
 
 const (

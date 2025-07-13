@@ -19,11 +19,11 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/multiformats/go-multihash"
 
-	"github.com/matiasinsaurralde/crowdllama/internal/discovery"
-	"github.com/matiasinsaurralde/crowdllama/pkg/config"
-	"github.com/matiasinsaurralde/crowdllama/pkg/consumer"
-	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
-	"github.com/matiasinsaurralde/crowdllama/pkg/version"
+	"github.com/crowdllama/crowdllama/internal/discovery"
+	"github.com/crowdllama/crowdllama/pkg/config"
+	"github.com/crowdllama/crowdllama/pkg/consumer"
+	"github.com/crowdllama/crowdllama/pkg/crowdllama"
+	"github.com/crowdllama/crowdllama/pkg/version"
 )
 
 // MetadataUpdateInterval is the interval at which worker metadata is updated

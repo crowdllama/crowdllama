@@ -19,10 +19,10 @@ import (
 	"github.com/multiformats/go-multihash"
 	"go.uber.org/zap"
 
-	"github.com/matiasinsaurralde/crowdllama/internal/discovery"
-	"github.com/matiasinsaurralde/crowdllama/internal/peermanager"
-	"github.com/matiasinsaurralde/crowdllama/pkg/config"
-	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
+	"github.com/crowdllama/crowdllama/internal/discovery"
+	"github.com/crowdllama/crowdllama/internal/peermanager"
+	"github.com/crowdllama/crowdllama/pkg/config"
+	"github.com/crowdllama/crowdllama/pkg/crowdllama"
 )
 
 // InferenceProtocol is the protocol identifier for inference requests

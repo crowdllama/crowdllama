@@ -11,7 +11,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"go.uber.org/zap"
 
-	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
+	"github.com/crowdllama/crowdllama/pkg/crowdllama"
 )
 
 // Config holds peer management settings

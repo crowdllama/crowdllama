@@ -18,9 +18,9 @@ import (
 	"github.com/multiformats/go-multiaddr"
 	"go.uber.org/zap"
 
-	"github.com/matiasinsaurralde/crowdllama/internal/discovery"
-	"github.com/matiasinsaurralde/crowdllama/internal/peermanager"
-	"github.com/matiasinsaurralde/crowdllama/pkg/crowdllama"
+	"github.com/crowdllama/crowdllama/internal/discovery"
+	"github.com/crowdllama/crowdllama/internal/peermanager"
+	"github.com/crowdllama/crowdllama/pkg/crowdllama"
 )
 
 // DefaultListenAddrs is the default listen addresses for the DHT server
