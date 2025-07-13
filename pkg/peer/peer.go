@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"time"
@@ -77,6 +76,9 @@ type Peer struct {
 	// Peer management
 	PeerManager *peermanager.Manager
 
+	// Logger
+	logger *zap.Logger
+
 	// Metadata update management
 	metadataCtx    context.Context
 	metadataCancel context.CancelFunc
@@ -113,7 +115,7 @@ func NewPeerWithConfig(
 		}
 	}
 
-	fmt.Println("BootstrapDHT ok")
+	logger.Debug("BootstrapDHT completed successfully")
 
 	// Initialize metadata
 	metadata := crowdllama.NewCrowdLlamaResource(h.ID().String())
@@ -155,6 +157,7 @@ func NewPeerWithConfig(
 		advertisingCtx:    advertisingCtx,
 		advertisingCancel: advertisingCancel,
 		bootstrapPeers:    cfg.BootstrapPeers,
+		logger:            logger,
 	}
 
 	// Set up stream handler with the peer instance
@@ -174,37 +177,37 @@ func NewPeer(ctx context.Context, privKey crypto.PrivKey, cfg *config.Configurat
 func (p *Peer) handleInferenceRequest(ctx context.Context, s network.Stream) {
 	defer func() {
 		if err := s.Close(); err != nil {
-			log.Printf("failed to close stream: %v", err)
+			p.logger.Debug("Failed to close stream", zap.Error(err))
 		}
 	}()
 
-	fmt.Println("StreamHandler is called")
+	p.logger.Debug("StreamHandler called for inference request")
 
 	// Only worker peers can handle inference requests
 	if !p.WorkerMode {
-		log.Printf("Consumer peer received inference request, ignoring")
+		p.logger.Debug("Consumer peer received inference request, ignoring")
 		return
 	}
 
 	input, err := p.readInferenceInput(s)
 	if err != nil {
-		log.Printf("Failed to read inference input: %v", err)
+		p.logger.Debug("Failed to read inference input", zap.Error(err))
 		return
 	}
 
 	output, err := p.callOllamaAPI(ctx, input, "/api/chat")
 	if err != nil {
-		log.Printf("Failed to call Ollama API: %v", err)
+		p.logger.Debug("Failed to call Ollama API", zap.Error(err))
 		return
 	}
 
 	if err := p.writeInferenceResponse(s, output); err != nil {
-		log.Printf("Failed to write inference response: %v", err)
+		p.logger.Debug("Failed to write inference response", zap.Error(err))
 		return
 	}
 
-	log.Printf("Worker sent response: %s", output)
-	fmt.Println("StreamHandler completed")
+	p.logger.Debug("Worker sent response", zap.String("output", output))
+	p.logger.Debug("StreamHandler completed")
 }
 
 func (p *Peer) readInferenceInput(s network.Stream) (string, error) {
@@ -219,7 +222,7 @@ func (p *Peer) readInferenceInput(s network.Stream) (string, error) {
 	}
 
 	input := string(buf[:n])
-	log.Printf("Worker received inference request (%d bytes): %s", n, input)
+	p.logger.Debug("Worker received inference request", zap.Int("bytes", n), zap.String("input", input))
 	return input, nil
 }
 
@@ -258,7 +261,7 @@ func (p *Peer) callOllamaAPI(ctx context.Context, input, apiPath string) (string
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			log.Printf("failed to close response body: %v", closeErr)
+			p.logger.Debug("Failed to close response body", zap.Error(closeErr))
 		}
 	}()
 
@@ -282,7 +285,7 @@ func (p *Peer) callOllamaAPI(ctx context.Context, input, apiPath string) (string
 
 func (p *Peer) writeInferenceResponse(s network.Stream, output string) error {
 	responseBytes := []byte(output)
-	log.Printf("Worker writing %d bytes: %s", len(responseBytes), output)
+	p.logger.Debug("Worker writing response", zap.Int("bytes", len(responseBytes)), zap.String("output", output))
 
 	_, err := s.Write(responseBytes)
 	if err != nil {
@@ -294,37 +297,37 @@ func (p *Peer) writeInferenceResponse(s network.Stream, output string) error {
 
 // SetupMetadataHandler sets up the metadata request handler
 func (p *Peer) SetupMetadataHandler() {
-	log.Printf("Setting up metadata handler for protocol: %s", crowdllama.MetadataProtocol)
+	p.logger.Debug("Setting up metadata handler for protocol", zap.String("protocol", crowdllama.MetadataProtocol))
 
 	p.Host.SetStreamHandler(crowdllama.MetadataProtocol, func(s network.Stream) {
 		defer func() {
 			if err := s.Close(); err != nil {
-				log.Printf("failed to close stream: %v", err)
+				p.logger.Debug("Failed to close stream", zap.Error(err))
 			}
 		}()
-		log.Printf("Peer received metadata request from %s", s.Conn().RemotePeer().String())
+		p.logger.Debug("Peer received metadata request", zap.String("peer", s.Conn().RemotePeer().String()))
 
 		// Serialize metadata to JSON
 		metadataJSON, err := p.Metadata.ToJSON()
 		if err != nil {
-			log.Printf("Failed to serialize metadata: %v", err)
+			p.logger.Debug("Failed to serialize metadata", zap.Error(err))
 			return
 		}
 
-		log.Printf("Peer sending metadata (%d bytes): %s", len(metadataJSON), string(metadataJSON))
+		p.logger.Debug("Peer sending metadata", zap.Int("bytes", len(metadataJSON)), zap.String("metadata", string(metadataJSON)))
 
 		// Send metadata response
 		_, err = s.Write(metadataJSON)
 		if err != nil {
-			log.Printf("Failed to send metadata: %v", err)
+			p.logger.Debug("Failed to send metadata", zap.Error(err))
 			return
 		}
 
 		// Close the stream after writing to signal EOF
-		log.Printf("Peer sent metadata successfully, closing stream")
+		p.logger.Debug("Peer sent metadata successfully, closing stream")
 	})
 
-	log.Printf("Metadata handler setup complete")
+	p.logger.Debug("Metadata handler setup complete")
 }
 
 // UpdateMetadata updates the peer's internal metadata
@@ -346,8 +349,7 @@ func (p *Peer) UpdateMetadata() error {
 		p.Metadata.LastUpdated = time.Now()
 		p.Metadata.Version = version.CommitHash // Set the CrowdLlama version
 
-		log.Printf("Updated worker peer metadata - Models: %v, Throughput: %.1f tokens/sec, VRAM: %dGB, Load: %.1f, GPU: %s, Version: %s",
-			models, tokensThroughput, vramGB, load, gpuModel, p.Metadata.Version)
+		p.logger.Debug("Updated worker peer metadata", zap.Strings("models", models), zap.Float64("throughput", tokensThroughput), zap.Int("vram", vramGB), zap.Float64("load", load), zap.String("gpu", gpuModel), zap.String("version", p.Metadata.Version))
 	} else {
 		// Consumer mode: empty resource advertisement
 		p.Metadata.SupportedModels = []string{}
@@ -358,7 +360,7 @@ func (p *Peer) UpdateMetadata() error {
 		p.Metadata.LastUpdated = time.Now()
 		p.Metadata.Version = version.CommitHash
 
-		log.Printf("Updated consumer peer metadata - Version: %s", p.Metadata.Version)
+		p.logger.Debug("Updated consumer peer metadata", zap.String("version", p.Metadata.Version))
 	}
 
 	return nil
@@ -378,17 +380,17 @@ func (p *Peer) StartMetadataUpdates() {
 
 		// Run initial update immediately
 		if err := p.UpdateMetadata(); err != nil {
-			log.Printf("Failed to perform initial metadata update: %v", err)
+			p.logger.Debug("Failed to perform initial metadata update", zap.Error(err))
 		}
 
 		for {
 			select {
 			case <-ticker.C:
 				if err := p.UpdateMetadata(); err != nil {
-					log.Printf("Failed to update metadata: %v", err)
+					p.logger.Debug("Failed to update metadata", zap.Error(err))
 				}
 			case <-p.metadataCtx.Done():
-				log.Printf("Metadata update loop stopped")
+				p.logger.Debug("Metadata update loop stopped")
 				return
 			}
 		}
@@ -409,14 +411,14 @@ func (p *Peer) StopMetadataUpdates() {
 // removeMetadataHandler removes the metadata protocol handler
 func (p *Peer) removeMetadataHandler() {
 	p.Host.RemoveStreamHandler(crowdllama.MetadataProtocol)
-	log.Printf("Removed metadata handler for protocol: %s", crowdllama.MetadataProtocol)
+	p.logger.Debug("Removed metadata handler for protocol", zap.String("protocol", crowdllama.MetadataProtocol))
 }
 
 // PublishMetadata publishes the peer's metadata to the DHT
 func (p *Peer) PublishMetadata(ctx context.Context) error {
 	// Check if DHT is connected before attempting to publish
 	if !p.IsDHTConnected() {
-		log.Printf("DHT is disconnected, attempting to reconnect to bootstrap peers...")
+		p.logger.Debug("DHT is disconnected, attempting to reconnect to bootstrap peers...")
 		if err := p.AttemptBootstrapReconnection(ctx); err != nil {
 			return fmt.Errorf("failed to reconnect to bootstrap peers: %w", err)
 		}
@@ -449,7 +451,7 @@ func (p *Peer) PublishMetadata(ctx context.Context) error {
 		return fmt.Errorf("failed to provide metadata to DHT: %w", err)
 	}
 
-	log.Printf("Published metadata to DHT with CID: %s", c.String())
+	p.logger.Debug("Published metadata to DHT", zap.String("cid", c.String()))
 	return nil
 }
 
@@ -472,16 +474,16 @@ func (p *Peer) AdvertisePeer(_ context.Context, namespace string) {
 		}
 		namespaceCID := cid.NewCidV1(cid.Raw, mh)
 
-		log.Printf("Peer advertising with namespace: %s, CID: %s", namespace, namespaceCID.String())
+		p.logger.Debug("Peer advertising with namespace", zap.String("namespace", namespace), zap.String("cid", namespaceCID.String()))
 
 		for {
 			select {
 			case <-ticker.C:
 				// Check if DHT is connected before attempting to advertise
 				if !p.IsDHTConnected() {
-					log.Printf("DHT is disconnected, attempting to reconnect to bootstrap peers...")
+					p.logger.Debug("DHT is disconnected, attempting to reconnect to bootstrap peers...")
 					if err := p.AttemptBootstrapReconnection(p.advertisingCtx); err != nil {
-						log.Printf("Failed to reconnect to bootstrap peers: %v", err)
+						p.logger.Debug("Failed to reconnect to bootstrap peers", zap.Error(err))
 						continue // Skip this advertising cycle and try again next time
 					}
 
@@ -490,7 +492,7 @@ func (p *Peer) AdvertisePeer(_ context.Context, namespace string) {
 
 					// Check again if reconnection was successful
 					if !p.IsDHTConnected() {
-						log.Printf("DHT is still disconnected after reconnection attempt, skipping advertisement")
+						p.logger.Debug("DHT is still disconnected after reconnection attempt, skipping advertisement")
 						continue // Skip this advertising cycle and try again next time
 					}
 				}
@@ -498,12 +500,12 @@ func (p *Peer) AdvertisePeer(_ context.Context, namespace string) {
 				// Advertise the peer using Provide
 				err := p.DHT.Provide(p.advertisingCtx, namespaceCID, true)
 				if err != nil {
-					log.Printf("Failed to advertise peer: %v", err)
+					p.logger.Debug("Failed to advertise peer", zap.Error(err))
 				} else {
-					log.Printf("Peer advertised with CID: %s", namespaceCID.String())
+					p.logger.Debug("Peer advertised with CID", zap.String("cid", namespaceCID.String()))
 				}
 			case <-p.advertisingCtx.Done():
-				log.Printf("Peer advertising stopped")
+				p.logger.Debug("Peer advertising stopped")
 				return
 			}
 		}

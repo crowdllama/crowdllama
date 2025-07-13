@@ -147,7 +147,6 @@ func AdvertiseModel(ctx context.Context, kadDHT *dht.IpfsDHT, namespace string) 
 	defer ticker.Stop()
 
 	for {
-		fmt.Printf("[DHT] Advertising namespace '%s'\n", namespace)
 		select {
 		case <-ticker.C:
 			c, err := cid.Parse(namespace)

@@ -238,7 +238,6 @@ func (c *Consumer) StopHTTPServer(ctx context.Context) error {
 func (c *Consumer) handleChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		fmt.Println("Method not allowed")
 		return
 	}
 
@@ -246,7 +245,6 @@ func (c *Consumer) handleChat(w http.ResponseWriter, r *http.Request) {
 	var req GenerateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		c.logger.Error("Failed to decode request", zap.Error(err))
-		fmt.Println("Failed to decode request")
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
@@ -285,7 +283,7 @@ func (c *Consumer) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Printf("RequestInference response: %+v, err = %+v\n", response, err)
+	c.logger.Debug("RequestInference completed", zap.String("response", response), zap.Error(err))
 
 	// Send successful response
 	generateResponse := GenerateResponse{
@@ -314,7 +312,7 @@ func (c *Consumer) sendJSONResponse(w http.ResponseWriter, response interface{},
 
 // RequestInference sends a string task to a worker and waits for a response
 func (c *Consumer) RequestInference(ctx context.Context, workerID, input string) (string, error) {
-	fmt.Println("*** RequestInference is called")
+	c.logger.Debug("*** RequestInference is called")
 	pid, err := peer.Decode(workerID)
 	if err != nil {
 		return "", fmt.Errorf("invalid worker peer ID: %w", err)

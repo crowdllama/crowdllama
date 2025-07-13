@@ -16,6 +16,7 @@ import (
 	"github.com/crowdllama/crowdllama/internal/keys"
 	"github.com/crowdllama/crowdllama/pkg/config"
 	"github.com/crowdllama/crowdllama/pkg/dht"
+	"github.com/crowdllama/crowdllama/pkg/logutil"
 	"github.com/crowdllama/crowdllama/pkg/version"
 )
 
@@ -37,7 +38,7 @@ func main() {
 			return
 		}
 	default:
-		fmt.Printf("Unknown command: %s\n", os.Args[1])
+		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", os.Args[1])
 		return
 	}
 }
@@ -49,10 +50,7 @@ func runDHTServer() error {
 		return err
 	}
 
-	logger, err := setupDHTLogger(cfg)
-	if err != nil {
-		return err
-	}
+	logger := logutil.NewAppLogger("dht", cfg.IsVerbose())
 	defer func() {
 		if syncErr := logger.Sync(); syncErr != nil {
 			fmt.Fprintf(os.Stderr, "failed to sync logger: %v\n", syncErr)
@@ -100,13 +98,6 @@ func parseDHTConfig(startCmd *flag.FlagSet) (*config.Configuration, error) {
 		return nil, fmt.Errorf("failed to parse args: %w", err)
 	}
 	return cfg, nil
-}
-
-func setupDHTLogger(cfg *config.Configuration) (*zap.Logger, error) {
-	if err := cfg.SetupLogger(); err != nil {
-		return nil, fmt.Errorf("failed to setup logger: %w", err)
-	}
-	return cfg.GetLogger(), nil
 }
 
 func getDHTPrivateKey(cfg *config.Configuration, logger *zap.Logger) (crypto.PrivKey, error) {

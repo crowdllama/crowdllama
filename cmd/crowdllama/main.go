@@ -21,6 +21,7 @@ import (
 	"github.com/crowdllama/crowdllama/pkg/crowdllama"
 	"github.com/crowdllama/crowdllama/pkg/gateway"
 	"github.com/crowdllama/crowdllama/pkg/ipc"
+	"github.com/crowdllama/crowdllama/pkg/logutil"
 	"github.com/crowdllama/crowdllama/pkg/peer"
 	"github.com/crowdllama/crowdllama/pkg/version"
 )
@@ -121,12 +122,8 @@ func setupLogging() error {
 	// Load from environment variables
 	cfg.LoadFromEnvironment()
 
-	// Setup logger
-	if err := cfg.SetupLogger(); err != nil {
-		return fmt.Errorf("failed to setup logger: %w", err)
-	}
-
-	logger = cfg.GetLogger()
+	// Setup logger using unified logging
+	logger = logutil.NewAppLogger("crowdllama", cfg.IsVerbose())
 
 	// Log startup information
 	logger.Info("CrowdLlama CLI version", zap.String("version", version.String()))
@@ -162,7 +159,6 @@ func runNetworkStatus() {
 	// TODO: Implement actual network status checking
 	// For now, just display a placeholder message
 	logger.Info("Network status check completed", zap.String("status", "placeholder"))
-	fmt.Println("Network status: Placeholder - implementation pending")
 }
 
 func runStart(cobraCmd *cobra.Command, _ []string) {

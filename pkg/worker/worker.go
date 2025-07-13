@@ -89,8 +89,6 @@ func (w *Worker) handleInferenceRequest(ctx context.Context, s network.Stream) {
 		}
 	}()
 
-	fmt.Println("StreamHandler is called")
-
 	input, err := w.readInferenceInput(s)
 	if err != nil {
 		log.Printf("Failed to read inference input: %v", err)
@@ -109,7 +107,6 @@ func (w *Worker) handleInferenceRequest(ctx context.Context, s network.Stream) {
 	}
 
 	log.Printf("Worker sent response: %s", output)
-	fmt.Println("StreamHandler completed")
 }
 
 func (w *Worker) readInferenceInput(s network.Stream) (string, error) {
@@ -218,8 +215,6 @@ func NewWorkerWithConfig(
 			return nil, fmt.Errorf("bootstrap DHT: %w", err)
 		}
 	}
-
-	fmt.Println("BootstrapDHT ok")
 
 	// Initialize metadata
 	metadata := crowdllama.NewCrowdLlamaResource(h.ID().String())

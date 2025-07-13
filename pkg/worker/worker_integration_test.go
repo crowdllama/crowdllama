@@ -31,8 +31,7 @@ func getRandomPort() (int, error) {
 	}
 	defer func() {
 		if closeErr := l.Close(); closeErr != nil {
-			// Log the error but don't fail the test for this
-			fmt.Printf("Warning: failed to close listener: %v\n", closeErr)
+			// Ignore close errors in tests
 		}
 	}()
 
@@ -229,7 +228,7 @@ func stepValidateWorkerAdvertisement(ctx context.Context, t *testing.T, dhtServe
 	t.Helper()
 	t.Log("Step 4: Validating worker advertisement")
 	time.Sleep(3 * time.Second)
-	namespaceCID, err := discovery.GetWorkerNamespaceCID()
+	namespaceCID, err := discovery.GetPeerNamespaceCID()
 	if err != nil {
 		t.Fatalf("Failed to get namespace CID: %v", err)
 	}
@@ -261,7 +260,7 @@ func stepValidateWorkerAdvertisement(ctx context.Context, t *testing.T, dhtServe
 func stepTestMetadataRetrieval(ctx context.Context, t *testing.T, dhtServer *dht.Server, worker *Worker, logger *zap.Logger) {
 	t.Helper()
 	t.Log("Step 5: Testing metadata retrieval")
-	metadata, err := discovery.RequestWorkerMetadata(ctx, dhtServer.Host, worker.Host.ID(), logger)
+	metadata, err := discovery.RequestPeerMetadata(ctx, worker.Host, worker.Host.ID(), logger)
 	if err != nil {
 		t.Errorf("Failed to request metadata from worker: %v", err)
 	} else {

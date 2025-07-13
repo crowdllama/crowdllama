@@ -31,8 +31,7 @@ func getRandomPort() (int, error) {
 	}
 	defer func() {
 		if closeErr := l.Close(); closeErr != nil {
-			// Log the error but don't fail the test for this
-			fmt.Printf("Warning: failed to close listener: %v\n", closeErr)
+			// Ignore close errors in tests
 		}
 	}()
 
