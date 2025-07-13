@@ -13,17 +13,17 @@ const (
 	// CrowdLlamaProtocol is the custom protocol for CrowdLlama DHT operations
 	CrowdLlamaProtocol = "/crowdllama/1.0.0"
 
-	// MetadataProtocol is the protocol for requesting worker metadata
+	// MetadataProtocol is the protocol for requesting peer metadata
 	MetadataProtocol = "/crowdllama/metadata/1.0.0"
 
-	// WorkerMetadataPrefix is the DHT key prefix for worker metadata
-	WorkerMetadataPrefix = "/crowdllama/worker/"
+	// PeerMetadataPrefix is the DHT key prefix for peer metadata
+	PeerMetadataPrefix = "/crowdllama/peer/"
 
-	// WorkerNamespace is the namespace used for worker discovery in the DHT
-	WorkerNamespace = "crowdllama-demo-namespace"
+	// PeerNamespace is the namespace used for peer discovery in the DHT
+	PeerNamespace = "crowdllama-demo-namespace"
 )
 
-// Resource represents a CrowdLlama resource (worker metadata)
+// Resource represents a CrowdLlama resource (peer metadata)
 type Resource struct {
 	PeerID           string    `json:"peer_id"`
 	SupportedModels  []string  `json:"supported_models"`
@@ -32,7 +32,8 @@ type Resource struct {
 	Load             float64   `json:"load"` // current load (0.0 to 1.0)
 	GPUModel         string    `json:"gpu_model"`
 	LastUpdated      time.Time `json:"last_updated"`
-	Version          string    `json:"version"` // CrowdLlama version (git commit hash)
+	Version          string    `json:"version"`     // CrowdLlama version (git commit hash)
+	WorkerMode       bool      `json:"worker_mode"` // true if this peer is in worker mode
 }
 
 // NewCrowdLlamaResource creates a new resource with the given peer ID
@@ -46,6 +47,7 @@ func NewCrowdLlamaResource(peerID string) *Resource {
 		GPUModel:         "",
 		LastUpdated:      time.Now(),
 		Version:          "unknown", // Will be set during metadata update
+		WorkerMode:       false,     // Default to consumer mode
 	}
 }
 
@@ -68,7 +70,7 @@ func FromJSON(data []byte) (*Resource, error) {
 	return &resource, nil
 }
 
-// GetDHTKey returns the DHT key for this worker's metadata
+// GetDHTKey returns the DHT key for this peer's metadata
 func (r *Resource) GetDHTKey() string {
 	return "/ipns/" + r.PeerID
 }

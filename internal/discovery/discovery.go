@@ -41,7 +41,8 @@ var defaultListenAddrs = []string{"/ip4/0.0.0.0/tcp/0"}
 
 const (
 	// defaultBootstrapPeerAddr is the default bootstrap peer address for the DHT:
-	defaultBootstrapPeerAddr = "/dns4/dht.crowdllama.org/tcp/9000/p2p/12D3KooWGtAsTBuXFJrywcneqUYsGLD6ym9en2uqc56g4fMySVcK"
+	// defaultBootstrapPeerAddr = "/dns4/dht.crowdllama.org/tcp/9000/p2p/12D3KooWGtAsTBuXFJrywcneqUYsGLD6ym9en2uqc56g4fMySVcK"
+	defaultBootstrapPeerAddr = "/ip4/127.0.0.1/tcp/9000/p2p/12D3KooWLLUBEZhkEq6NtTLD99RRpEYdcbe8uzx3L56UgF5VK4bw"
 )
 
 // NewHostAndDHT creates a libp2p host with DHT
@@ -173,9 +174,9 @@ func WaitForShutdown() {
 	<-sigCh
 }
 
-// GetWorkerNamespaceCID generates the CID for worker discovery namespace
-func GetWorkerNamespaceCID() (cid.Cid, error) {
-	namespace := crowdllama.WorkerNamespace
+// GetPeerNamespaceCID generates the CID for peer discovery namespace
+func GetPeerNamespaceCID() (cid.Cid, error) {
+	namespace := crowdllama.PeerNamespace
 	mh, err := multihash.Sum([]byte(namespace), multihash.IDENTITY, -1)
 	if err != nil {
 		return cid.Undef, fmt.Errorf("failed to create multihash for namespace: %w", err)
@@ -184,7 +185,7 @@ func GetWorkerNamespaceCID() (cid.Cid, error) {
 }
 
 // readMetadataStream reads all data from the stream until EOF
-func readMetadataStream(stream network.Stream, workerPeer peer.ID, logger *zap.Logger) ([]byte, error) {
+func readMetadataStream(stream network.Stream, peerID peer.ID, logger *zap.Logger) ([]byte, error) {
 	var metadataJSON []byte
 	buf := make([]byte, 1024)
 	totalRead := 0
@@ -195,44 +196,44 @@ func readMetadataStream(stream network.Stream, workerPeer peer.ID, logger *zap.L
 			metadataJSON = append(metadataJSON, buf[:n]...)
 			totalRead += n
 			logger.Debug("Read bytes from metadata stream",
-				zap.String("worker_peer_id", workerPeer.String()),
+				zap.String("peer_id", peerID.String()),
 				zap.Int("bytes_read", n),
 				zap.Int("total_read", totalRead))
 		}
 		if readErr != nil {
 			if readErr.Error() == "EOF" {
 				logger.Debug("Received EOF from metadata stream",
-					zap.String("worker_peer_id", workerPeer.String()),
+					zap.String("peer_id", peerID.String()),
 					zap.Int("total_bytes_read", totalRead))
 				break // EOF reached, we're done reading
 			}
-			logger.Error("Failed to read metadata from worker",
-				zap.String("worker_peer_id", workerPeer.String()),
+			logger.Error("Failed to read metadata from peer",
+				zap.String("peer_id", peerID.String()),
 				zap.Error(readErr))
-			return nil, fmt.Errorf("failed to read metadata from worker: %w", readErr)
+			return nil, fmt.Errorf("failed to read metadata from peer: %w", readErr)
 		}
 	}
 
 	if len(metadataJSON) == 0 {
-		return nil, fmt.Errorf("no metadata received from worker")
+		return nil, fmt.Errorf("no metadata received from peer")
 	}
 
 	return metadataJSON, nil
 }
 
-// RequestWorkerMetadata retrieves metadata from a worker peer using the metadata protocol
-func RequestWorkerMetadata(ctx context.Context, h host.Host, workerPeer peer.ID, logger *zap.Logger) (*crowdllama.Resource, error) {
-	logger.Debug("Opening stream to worker for metadata request",
-		zap.String("worker_peer_id", workerPeer.String()),
+// RequestPeerMetadata retrieves metadata from a peer using the metadata protocol
+func RequestPeerMetadata(ctx context.Context, h host.Host, peerID peer.ID, logger *zap.Logger) (*crowdllama.Resource, error) {
+	logger.Debug("Opening stream to peer for metadata request",
+		zap.String("peer_id", peerID.String()),
 		zap.String("protocol", crowdllama.MetadataProtocol))
 
-	// Open a stream to the worker
-	stream, err := h.NewStream(ctx, workerPeer, crowdllama.MetadataProtocol)
+	// Open a stream to the peer
+	stream, err := h.NewStream(ctx, peerID, crowdllama.MetadataProtocol)
 	if err != nil {
-		logger.Error("Failed to open stream to worker",
-			zap.String("worker_peer_id", workerPeer.String()),
+		logger.Error("Failed to open stream to peer",
+			zap.String("peer_id", peerID.String()),
 			zap.Error(err))
-		return nil, fmt.Errorf("failed to open stream to worker: %w", err)
+		return nil, fmt.Errorf("failed to open stream to peer: %w", err)
 	}
 	defer func() {
 		if closeErr := stream.Close(); closeErr != nil {
@@ -244,30 +245,30 @@ func RequestWorkerMetadata(ctx context.Context, h host.Host, workerPeer peer.ID,
 		logger.Warn("failed to set read deadline", zap.Error(setDeadlineErr))
 	}
 
-	logger.Debug("Reading metadata response from worker",
-		zap.String("worker_peer_id", workerPeer.String()))
+	logger.Debug("Reading metadata response from peer",
+		zap.String("peer_id", peerID.String()))
 
 	// Read the metadata response
-	metadataJSON, err := readMetadataStream(stream, workerPeer, logger)
+	metadataJSON, err := readMetadataStream(stream, peerID, logger)
 	if err != nil {
 		return nil, err
 	}
 
 	logger.Debug("Parsing metadata response",
-		zap.String("worker_peer_id", workerPeer.String()),
+		zap.String("peer_id", peerID.String()),
 		zap.Int("metadata_length", len(metadataJSON)))
 
 	// Parse the metadata
 	metadata, err := crowdllama.FromJSON(metadataJSON)
 	if err != nil {
-		logger.Error("Failed to parse metadata from worker",
-			zap.String("worker_peer_id", workerPeer.String()),
+		logger.Error("Failed to parse metadata from peer",
+			zap.String("peer_id", peerID.String()),
 			zap.Error(err))
-		return nil, fmt.Errorf("failed to parse metadata from worker: %w", err)
+		return nil, fmt.Errorf("failed to parse metadata from peer: %w", err)
 	}
 
-	logger.Debug("Successfully retrieved metadata from worker",
-		zap.String("worker_peer_id", workerPeer.String()),
+	logger.Debug("Successfully retrieved metadata from peer",
+		zap.String("peer_id", peerID.String()),
 		zap.String("gpu_model", metadata.GPUModel),
 		zap.Int("vram_gb", metadata.VRAMGB),
 		zap.Float64("tokens_throughput", metadata.TokensThroughput))
@@ -287,7 +288,7 @@ func processProvider(
 	},
 ) *crowdllama.Resource {
 	peerID := provider.ID.String()
-	logger.Info("Found worker provider", zap.String("peer_id", peerID))
+	logger.Info("Found peer provider", zap.String("peer_id", peerID))
 
 	// Check if this peer is already marked as unhealthy or recently removed
 	if peerManager != nil && peerManager.IsPeerUnhealthy(peerID) {
@@ -296,13 +297,13 @@ func processProvider(
 		return nil
 	}
 
-	// Give the worker a moment to set up handlers
+	// Give the peer a moment to set up handlers
 	time.Sleep(100 * time.Millisecond)
 
-	// Request metadata from the worker
-	metadata, err := RequestWorkerMetadata(ctx, kadDHT.Host(), provider.ID, logger)
+	// Request metadata from the peer
+	metadata, err := RequestPeerMetadata(ctx, kadDHT.Host(), provider.ID, logger)
 	if err != nil {
-		logger.Warn("Failed to get metadata from worker, skipping",
+		logger.Warn("Failed to get metadata from peer, skipping",
 			zap.String("peer_id", peerID),
 			zap.Error(err))
 
@@ -315,13 +316,13 @@ func processProvider(
 
 	// Verify the metadata is recent (within last hour)
 	if time.Since(metadata.LastUpdated) > 1*time.Hour {
-		logger.Warn("Metadata from worker is too old, skipping",
+		logger.Warn("Metadata from peer is too old, skipping",
 			zap.String("peer_id", peerID),
 			zap.Time("last_updated", metadata.LastUpdated))
 		return nil
 	}
 
-	logger.Info("Found worker",
+	logger.Info("Found peer",
 		zap.String("peer_id", peerID),
 		zap.String("gpu_model", metadata.GPUModel),
 		zap.Strings("supported_models", metadata.SupportedModels))
@@ -329,22 +330,22 @@ func processProvider(
 	return metadata
 }
 
-// DiscoverWorkers finds workers advertising the namespace and retrieves their metadata
-func DiscoverWorkers(ctx context.Context, kadDHT *dht.IpfsDHT, logger *zap.Logger, peerManager interface {
+// DiscoverPeers finds peers advertising the namespace and retrieves their metadata
+func DiscoverPeers(ctx context.Context, kadDHT *dht.IpfsDHT, logger *zap.Logger, peerManager interface {
 	MarkPeerAsRecentlyRemoved(string)
 	IsPeerUnhealthy(string) bool
 },
 ) ([]*crowdllama.Resource, error) {
-	workers := make([]*crowdllama.Resource, 0, 10) // Preallocate with capacity 10
+	peers := make([]*crowdllama.Resource, 0, 10) // Preallocate with capacity 10
 
 	// Get the namespace CID
-	namespaceCID, err := GetWorkerNamespaceCID()
+	namespaceCID, err := GetPeerNamespaceCID()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get namespace CID: %w", err)
 	}
 
-	logger.Info("Searching for workers with namespace CID",
-		zap.String("namespace", crowdllama.WorkerNamespace),
+	logger.Info("Searching for peers with namespace CID",
+		zap.String("namespace", crowdllama.PeerNamespace),
 		zap.String("cid", namespaceCID.String()))
 
 	// Find providers for the namespace CID
@@ -355,13 +356,13 @@ func DiscoverWorkers(ctx context.Context, kadDHT *dht.IpfsDHT, logger *zap.Logge
 		providerCount++
 		metadata := processProvider(ctx, provider, kadDHT, logger, peerManager)
 		if metadata != nil {
-			workers = append(workers, metadata)
+			peers = append(peers, metadata)
 		}
 	}
 
 	logger.Info("Discovery complete",
 		zap.Int("providers_found", providerCount),
-		zap.Int("workers_with_metadata", len(workers)))
+		zap.Int("peers_with_metadata", len(peers)))
 
-	return workers, nil
+	return peers, nil
 }
