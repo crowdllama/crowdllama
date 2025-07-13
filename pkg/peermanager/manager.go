@@ -380,7 +380,7 @@ func (pm *Manager) Advertise(namespace string) {
 		for {
 			select {
 			case <-ticker.C:
-				discovery.AdvertiseModel(pm.advertisingCtx, pm.dht, namespace)
+				discovery.AdvertiseModel(pm.advertisingCtx, pm.dht, namespace, pm.logger)
 			case <-pm.advertisingCtx.Done():
 				return
 			}

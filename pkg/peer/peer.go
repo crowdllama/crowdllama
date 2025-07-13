@@ -99,18 +99,18 @@ func NewPeerWithConfig(
 	workerMode bool,
 	logger *zap.Logger,
 ) (*Peer, error) {
-	h, kadDHT, err := discovery.NewHostAndDHT(ctx, privKey)
+	h, kadDHT, err := discovery.NewHostAndDHT(ctx, privKey, logger)
 	if err != nil {
 		return nil, fmt.Errorf("new host and DHT: %w", err)
 	}
 
 	// Bootstrap with custom peers if provided, otherwise use defaults
 	if len(cfg.BootstrapPeers) > 0 {
-		if err := discovery.BootstrapDHTWithPeers(ctx, h, kadDHT, cfg.BootstrapPeers); err != nil {
+		if err := discovery.BootstrapDHTWithPeers(ctx, h, kadDHT, cfg.BootstrapPeers, logger); err != nil {
 			return nil, fmt.Errorf("bootstrap DHT with custom peers: %w", err)
 		}
 	} else {
-		if err := discovery.BootstrapDHT(ctx, h, kadDHT); err != nil {
+		if err := discovery.BootstrapDHT(ctx, h, kadDHT, logger); err != nil {
 			return nil, fmt.Errorf("bootstrap DHT: %w", err)
 		}
 	}
@@ -528,7 +528,7 @@ func (p *Peer) IsDHTConnected() bool {
 // AttemptBootstrapReconnection attempts to reconnect to bootstrap peers
 func (p *Peer) AttemptBootstrapReconnection(ctx context.Context) error {
 	if len(p.bootstrapPeers) > 0 {
-		return discovery.BootstrapDHTWithPeers(ctx, p.Host, p.DHT, p.bootstrapPeers)
+		return discovery.BootstrapDHTWithPeers(ctx, p.Host, p.DHT, p.bootstrapPeers, p.logger)
 	}
-	return discovery.BootstrapDHT(ctx, p.Host, p.DHT)
+	return discovery.BootstrapDHT(ctx, p.Host, p.DHT, p.logger)
 }
