@@ -108,6 +108,10 @@ func (pm *Manager) AddOrUpdatePeer(peerID string, metadata *crowdllama.Resource)
 		info.IsHealthy = true
 		info.FailedAttempts = 0
 		info.LastMetadataAge = time.Since(metadata.LastUpdated)
+		pm.logger.Debug("Updated existing peer",
+			zap.String("peer_id", peerID),
+			zap.Bool("worker_mode", metadata.WorkerMode),
+			zap.String("gpu_model", metadata.GPUModel))
 	} else {
 		pm.peers[peerID] = &PeerInfo{
 			PeerID:          peerID,
@@ -118,6 +122,11 @@ func (pm *Manager) AddOrUpdatePeer(peerID string, metadata *crowdllama.Resource)
 			IsHealthy:       true,
 			LastMetadataAge: time.Since(metadata.LastUpdated),
 		}
+		pm.logger.Info("Added new peer to manager",
+			zap.String("peer_id", peerID),
+			zap.Bool("worker_mode", metadata.WorkerMode),
+			zap.String("gpu_model", metadata.GPUModel),
+			zap.Int("total_peers", len(pm.peers)))
 	}
 }
 
@@ -324,7 +333,43 @@ func (pm *Manager) ValidateMetadata(metadata *crowdllama.Resource) error {
 	return nil
 }
 
-// GetConfig returns the peer manager's configuration
+// GetConfig returns the current configuration
 func (pm *Manager) GetConfig() *Config {
 	return pm.config
+}
+
+// PeerStatistics holds statistics about peers
+type PeerStatistics struct {
+	TotalPeers    int `json:"total_peers"`
+	WorkerPeers   int `json:"worker_peers"`
+	ConsumerPeers int `json:"consumer_peers"`
+}
+
+// GetPeerStatistics returns statistics about available peers
+func (pm *Manager) GetPeerStatistics() PeerStatistics {
+	peers := pm.GetHealthyPeers()
+
+	stats := PeerStatistics{
+		TotalPeers:    len(peers),
+		WorkerPeers:   0,
+		ConsumerPeers: 0,
+	}
+
+	for _, peer := range peers {
+		if peer.Metadata != nil {
+			if peer.Metadata.WorkerMode {
+				stats.WorkerPeers++
+			} else {
+				stats.ConsumerPeers++
+			}
+		}
+	}
+
+	pm.logger.Debug("Peer statistics calculated",
+		zap.Int("total_peers", stats.TotalPeers),
+		zap.Int("worker_peers", stats.WorkerPeers),
+		zap.Int("consumer_peers", stats.ConsumerPeers),
+		zap.Int("healthy_peers_in_manager", len(peers)))
+
+	return stats
 }
