@@ -18,9 +18,7 @@ import (
 	"github.com/multiformats/go-multiaddr"
 	"go.uber.org/zap"
 
-	"github.com/crowdllama/crowdllama/internal/discovery"
-	"github.com/crowdllama/crowdllama/internal/peermanager"
-	"github.com/crowdllama/crowdllama/pkg/crowdllama"
+	"github.com/crowdllama/crowdllama/pkg/peermanager"
 )
 
 // DefaultListenAddrs is the default listen addresses for the DHT server
@@ -73,7 +71,7 @@ func NewDHTServerWithAddrs(ctx context.Context, privKey crypto.PrivKey, logger *
 		logger:      logger,
 		ctx:         ctx,
 		cancel:      cancel,
-		peerManager: peermanager.NewManager(ctx, h, logger, peerConfig),
+		peerManager: peermanager.NewManager(ctx, h, kadDHT, logger, peerConfig),
 	}
 
 	server.peerAddrs = generatePeerAddrs(h)
@@ -116,12 +114,17 @@ func createDHT(ctx context.Context, h host.Host) (*dht.IpfsDHT, error) {
 func getPeerManagerConfig() *peermanager.Config {
 	if os.Getenv("CROWDLLAMA_TEST_MODE") == "1" {
 		return &peermanager.Config{
-			StalePeerTimeout:    30 * time.Second,
-			HealthCheckInterval: 5 * time.Second,
-			MaxFailedAttempts:   2,
-			BackoffBase:         5 * time.Second,
-			MetadataTimeout:     2 * time.Second,
-			MaxMetadataAge:      30 * time.Second,
+			DiscoveryInterval:      2 * time.Second,
+			AdvertisingInterval:    5 * time.Second,
+			MetadataUpdateInterval: 5 * time.Second,
+			PeerHealthConfig: &peermanager.PeerHealthConfig{
+				StalePeerTimeout:    30 * time.Second,
+				HealthCheckInterval: 5 * time.Second,
+				MaxFailedAttempts:   2,
+				BackoffBase:         5 * time.Second,
+				MetadataTimeout:     2 * time.Second,
+				MaxMetadataAge:      30 * time.Second,
+			},
 		}
 	}
 	return peermanager.DefaultConfig()
@@ -184,8 +187,11 @@ func (s *Server) Start() (string, error) {
 		},
 	})
 
-	// Start periodic peer discovery
-	go s.discoverPeersPeriodically()
+	// Start the peer manager
+	s.peerManager.Start()
+
+	// Start periodic logging
+	go s.startPeriodicLogging()
 
 	s.logger.Info("Bootstrapping DHT network")
 	if err := s.DHT.Bootstrap(s.ctx); err != nil {
@@ -202,6 +208,7 @@ func (s *Server) Start() (string, error) {
 // Stop stops the DHT server
 func (s *Server) Stop() {
 	s.logger.Info("Stopping DHT server...")
+	s.peerManager.Stop()
 	s.cancel()
 	if err := s.Host.Close(); err != nil {
 		s.logger.Error("Failed to close host", zap.Error(err))
@@ -375,113 +382,6 @@ func (s *Server) handlePeerDisconnected(_ network.Network, conn network.Conn) {
 		zap.String("peer_id", peerID))
 }
 
-// discoverPeersPeriodically periodically discovers peers advertising the namespace
-func (s *Server) discoverPeersPeriodically() {
-	s.peerManager.Start()
-	discoveryInterval := 10 * time.Second
-	if os.Getenv("CROWDLLAMA_TEST_MODE") == "1" {
-		discoveryInterval = 2 * time.Second
-	}
-	ticker := time.NewTicker(discoveryInterval)
-	defer ticker.Stop()
-	natLogInterval := 30 * time.Second
-	if os.Getenv("CROWDLLAMA_TEST_MODE") == "1" {
-		natLogInterval = 10 * time.Second
-	}
-	natTicker := time.NewTicker(natLogInterval)
-	defer natTicker.Stop()
-	statsLogInterval := 15 * time.Second
-	if os.Getenv("CROWDLLAMA_TEST_MODE") == "1" {
-		statsLogInterval = 5 * time.Second
-	}
-	statsTicker := time.NewTicker(statsLogInterval)
-	defer statsTicker.Stop()
-	namespaceCID := s.getPeerNamespaceCID()
-	s.logger.Info("Starting periodic peer discovery",
-		zap.String("namespace_cid", namespaceCID.String()),
-		zap.Duration("interval", discoveryInterval))
-	for {
-		select {
-		case <-ticker.C:
-			s.handlePeerDiscovery(namespaceCID)
-		case <-natTicker.C:
-			s.LogNATStatus()
-		case <-statsTicker.C:
-			s.LogPeerStats()
-		case <-s.ctx.Done():
-			return
-		}
-	}
-}
-
-func (s *Server) handlePeerDiscovery(namespaceCID cid.Cid) {
-	s.logger.Debug("Searching for peers advertising namespace",
-		zap.String("namespace_cid", namespaceCID.String()))
-	providers := s.DHT.FindProvidersAsync(context.Background(), namespaceCID, 10)
-	peerCount := 0
-	for provider := range providers {
-		peerID := provider.ID.String()
-		if s.peerManager.IsPeerUnhealthy(peerID) {
-			s.logger.Debug("Skipping unhealthy peer",
-				zap.String("peer_id", peerID))
-			continue
-		}
-		peerCount++
-		s.logger.Info("Found peer",
-			zap.String("peer_id", peerID),
-			zap.Strings("addresses", s.multiaddrsToStrings(provider.Addrs)))
-		metadata, err := s.requestPeerMetadata(context.Background(), provider.ID)
-		if err != nil {
-			s.logger.Error("Failed to get metadata from peer",
-				zap.String("peer_id", peerID),
-				zap.Error(err))
-			continue
-		}
-		if err := s.peerManager.ValidateMetadata(metadata); err != nil {
-			s.logger.Warn("Metadata validation failed, skipping peer",
-				zap.String("peer_id", provider.ID.String()),
-				zap.Error(err))
-			continue
-		}
-		s.peerManager.AddOrUpdatePeer(provider.ID.String(), metadata)
-		s.logger.Info("Peer metadata retrieved successfully",
-			zap.String("peer_id", provider.ID.String()),
-			zap.Bool("worker_mode", metadata.WorkerMode),
-			zap.String("gpu_model", metadata.GPUModel),
-			zap.Int("vram_gb", metadata.VRAMGB),
-			zap.Float64("tokens_throughput", metadata.TokensThroughput),
-			zap.Float64("current_load", metadata.Load),
-			zap.Strings("supported_models", metadata.SupportedModels),
-			zap.Time("last_updated", metadata.LastUpdated))
-	}
-	if peerCount == 0 {
-		s.logger.Debug("No peers found advertising namespace",
-			zap.String("namespace_cid", namespaceCID.String()))
-	} else {
-		s.logger.Info("Peer discovery completed",
-			zap.String("namespace_cid", namespaceCID.String()),
-			zap.Int("total_peers_found", peerCount))
-	}
-}
-
-// getPeerNamespaceCID generates the same namespace CID as peers
-func (s *Server) getPeerNamespaceCID() cid.Cid {
-	namespaceCID, err := discovery.GetPeerNamespaceCID()
-	if err != nil {
-		panic("Failed to get namespace CID: " + err.Error())
-	}
-	return namespaceCID
-}
-
-// requestPeerMetadata requests metadata from a peer
-func (s *Server) requestPeerMetadata(ctx context.Context, peerID peer.ID) (*crowdllama.Resource, error) {
-	metadata, err := discovery.RequestPeerMetadata(ctx, s.Host, peerID, s.logger)
-	if err != nil {
-		return nil, fmt.Errorf("request peer metadata: %w", err)
-	}
-	return metadata, nil
-}
-
 // multiaddrsToStrings converts multiaddrs to string slice for logging
 func (s *Server) multiaddrsToStrings(addrs []multiaddr.Multiaddr) []string {
 	result := make([]string, len(addrs))
@@ -501,6 +401,34 @@ func (s *Server) isHolePunchedConnection(remoteAddr, direction string) bool {
 	// This is a simplified heuristic - in a real implementation you might track
 	// connection establishment events more precisely
 	return direction == "Outbound" && !strings.Contains(remoteAddr, "/p2p-circuit/")
+}
+
+// startPeriodicLogging starts periodic logging of NAT status and peer statistics
+func (s *Server) startPeriodicLogging() {
+	natLogInterval := 30 * time.Second
+	if os.Getenv("CROWDLLAMA_TEST_MODE") == "1" {
+		natLogInterval = 10 * time.Second
+	}
+	natTicker := time.NewTicker(natLogInterval)
+	defer natTicker.Stop()
+
+	statsLogInterval := 15 * time.Second
+	if os.Getenv("CROWDLLAMA_TEST_MODE") == "1" {
+		statsLogInterval = 5 * time.Second
+	}
+	statsTicker := time.NewTicker(statsLogInterval)
+	defer statsTicker.Stop()
+
+	for {
+		select {
+		case <-natTicker.C:
+			s.LogNATStatus()
+		case <-statsTicker.C:
+			s.LogPeerStats()
+		case <-s.ctx.Done():
+			return
+		}
+	}
 }
 
 // isExternalIP checks if an address is from an external IP

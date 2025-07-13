@@ -16,7 +16,6 @@ import (
 
 	"github.com/ollama/ollama/cmd"
 
-	"github.com/crowdllama/crowdllama/internal/discovery"
 	"github.com/crowdllama/crowdllama/internal/keys"
 	"github.com/crowdllama/crowdllama/pkg/config"
 	"github.com/crowdllama/crowdllama/pkg/crowdllama"
@@ -298,18 +297,12 @@ func runConsumerMode() {
 	// Start the peer manager
 	p.PeerManager.Start()
 
-	// Create gateway and set its peer manager
-	g, err := gateway.NewGateway(ctx, logger, privKey, cfg)
+	// Create gateway using the peer
+	g, err := gateway.NewGateway(ctx, logger, p)
 	if err != nil {
 		logger.Error("Failed to start gateway", zap.Error(err))
 		return
 	}
-
-	// Set the gateway's peer manager to use the peer's manager
-	g.SetPeerManager(p.PeerManager)
-
-	// Set the gateway in the peer
-	p.Gateway = g
 
 	logger.Info("Peer initialized in consumer mode", zap.String("peer_id", p.Host.ID().String()))
 	logger.Info("Peer addresses", zap.Any("addresses", p.Host.Addrs()))
@@ -382,41 +375,15 @@ func startPeerDiscovery(ctx context.Context, p *peer.Peer, logger *zap.Logger) {
 		discoveryTicker := time.NewTicker(15 * time.Second)
 		defer discoveryTicker.Stop()
 
-		// Track previously discovered peers to detect new ones
-		knownPeers := make(map[string]bool)
-
 		for {
 			select {
 			case <-discoveryTicker.C:
-				discoveredPeers, err := discovery.DiscoverPeers(ctx, p.DHT, logger, p.PeerManager)
-				if err != nil {
-					logger.Error("Failed to discover peers", zap.Error(err))
-					continue
-				}
-
-				// Check for new peers and add them to the peer manager
-				for _, peer := range discoveredPeers {
-					peerID := peer.PeerID
-					if !knownPeers[peerID] {
-						// This is a newly discovered peer
-						peerType := "consumer"
-						if peer.WorkerMode {
-							peerType = "worker"
-						}
-
-						logger.Info("Discovered new peer",
-							zap.String("peer_id", peerID),
-							zap.String("peer_type", peerType),
-							zap.String("gpu_model", peer.GPUModel),
-							zap.Int("vram_gb", peer.VRAMGB),
-							zap.Float64("tokens_throughput", peer.TokensThroughput),
-							zap.Strings("supported_models", peer.SupportedModels))
-
-						// Add the peer to the peer manager
-						p.PeerManager.AddOrUpdatePeer(peerID, peer)
-						knownPeers[peerID] = true
-					}
-				}
+				// The peer manager handles discovery internally, we just log the current state
+				stats := p.PeerManager.GetPeerStatistics()
+				logger.Info("Peer discovery status",
+					zap.Int("total_peers", stats.TotalPeers),
+					zap.Int("worker_peers", stats.WorkerPeers),
+					zap.Int("consumer_peers", stats.ConsumerPeers))
 
 			case <-ctx.Done():
 				return

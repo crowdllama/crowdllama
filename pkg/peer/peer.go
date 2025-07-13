@@ -20,10 +20,9 @@ import (
 	"github.com/multiformats/go-multihash"
 
 	"github.com/crowdllama/crowdllama/internal/discovery"
-	"github.com/crowdllama/crowdllama/internal/peermanager"
 	"github.com/crowdllama/crowdllama/pkg/config"
 	"github.com/crowdllama/crowdllama/pkg/crowdllama"
-	"github.com/crowdllama/crowdllama/pkg/gateway"
+	"github.com/crowdllama/crowdllama/pkg/peermanager"
 	"github.com/crowdllama/crowdllama/pkg/version"
 	"go.uber.org/zap"
 )
@@ -78,9 +77,6 @@ type Peer struct {
 	// Peer management
 	PeerManager *peermanager.Manager
 
-	// Gateway (only set in consumer mode)
-	Gateway *gateway.Gateway
-
 	// Metadata update management
 	metadataCtx    context.Context
 	metadataCancel context.CancelFunc
@@ -133,12 +129,17 @@ func NewPeerWithConfig(
 	peerManagerConfig := peermanager.DefaultConfig()
 	if os.Getenv("CROWDLLAMA_TEST_MODE") == "1" {
 		peerManagerConfig = &peermanager.Config{
-			StalePeerTimeout:    30 * time.Second, // Shorter for testing
-			HealthCheckInterval: 5 * time.Second,
-			MaxFailedAttempts:   2,
-			BackoffBase:         5 * time.Second,
-			MetadataTimeout:     2 * time.Second,
-			MaxMetadataAge:      30 * time.Second,
+			DiscoveryInterval:      2 * time.Second,
+			AdvertisingInterval:    5 * time.Second,
+			MetadataUpdateInterval: 5 * time.Second,
+			PeerHealthConfig: &peermanager.PeerHealthConfig{
+				StalePeerTimeout:    30 * time.Second, // Shorter for testing
+				HealthCheckInterval: 5 * time.Second,
+				MaxFailedAttempts:   2,
+				BackoffBase:         5 * time.Second,
+				MetadataTimeout:     2 * time.Second,
+				MaxMetadataAge:      30 * time.Second,
+			},
 		}
 	}
 
@@ -148,7 +149,7 @@ func NewPeerWithConfig(
 		Metadata:          metadata,
 		Config:            cfg,
 		WorkerMode:        workerMode,
-		PeerManager:       peermanager.NewManager(ctx, h, logger, peerManagerConfig),
+		PeerManager:       peermanager.NewManager(ctx, h, kadDHT, logger, peerManagerConfig),
 		metadataCtx:       metadataCtx,
 		metadataCancel:    metadataCancel,
 		advertisingCtx:    advertisingCtx,

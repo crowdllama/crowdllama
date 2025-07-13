@@ -9,16 +9,12 @@ import (
 	"os"
 	"time"
 
-	dht "github.com/libp2p/go-libp2p-kad-dht"
-	"github.com/libp2p/go-libp2p/core/crypto"
-	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"go.uber.org/zap"
 
 	"github.com/crowdllama/crowdllama/internal/discovery"
-	"github.com/crowdllama/crowdllama/internal/peermanager"
-	"github.com/crowdllama/crowdllama/pkg/config"
 	"github.com/crowdllama/crowdllama/pkg/crowdllama"
+	peerpkg "github.com/crowdllama/crowdllama/pkg/peer"
 )
 
 // InferenceProtocol is the protocol identifier for inference requests
@@ -55,68 +51,27 @@ type GenerateResponse struct {
 
 // Gateway handles HTTP API requests and forwards them to workers in the P2P network
 type Gateway struct {
-	Host            host.Host
-	DHT             *dht.IpfsDHT
+	peer            *peerpkg.Peer
 	server          *http.Server
 	logger          *zap.Logger
-	peerManager     *peermanager.Manager
 	discoveryCtx    context.Context
 	discoveryCancel context.CancelFunc
 }
 
-// NewGatewayWithConfig creates a new gateway instance using the provided configuration
-func NewGatewayWithConfig(
+// NewGateway creates a new gateway instance using an existing Peer
+func NewGateway(
 	ctx context.Context,
 	logger *zap.Logger,
-	privKey crypto.PrivKey,
-	cfg *config.Configuration,
+	p *peerpkg.Peer,
 ) (*Gateway, error) {
-	h, kadDHT, err := discovery.NewHostAndDHT(ctx, privKey)
-	if err != nil {
-		return nil, fmt.Errorf("new host and DHT: %w", err)
-	}
-
-	// Bootstrap with custom peers if provided, otherwise use defaults
-	if len(cfg.BootstrapPeers) > 0 {
-		if err := discovery.BootstrapDHTWithPeers(ctx, h, kadDHT, cfg.BootstrapPeers); err != nil {
-			return nil, fmt.Errorf("bootstrap DHT with custom peers: %w", err)
-		}
-	} else {
-		if err := discovery.BootstrapDHT(ctx, h, kadDHT); err != nil {
-			return nil, fmt.Errorf("bootstrap DHT: %w", err)
-		}
-	}
-
 	discoveryCtx, discoveryCancel := context.WithCancel(ctx)
-
-	// Initialize peer manager with test configuration if in test mode
-	peerConfig := peermanager.DefaultConfig()
-	if os.Getenv("CROWDLLAMA_TEST_MODE") == "1" {
-		peerConfig = &peermanager.Config{
-			StalePeerTimeout:    30 * time.Second, // Shorter for testing
-			HealthCheckInterval: 5 * time.Second,
-			MaxFailedAttempts:   2,
-			BackoffBase:         5 * time.Second,
-			MetadataTimeout:     2 * time.Second,
-			MaxMetadataAge:      30 * time.Second,
-		}
-	}
-
-	gateway := &Gateway{
-		Host:            h,
-		DHT:             kadDHT,
+	g := &Gateway{
+		peer:            p,
 		logger:          logger,
-		peerManager:     peermanager.NewManager(ctx, h, logger, peerConfig),
 		discoveryCtx:    discoveryCtx,
 		discoveryCancel: discoveryCancel,
 	}
-
-	return gateway, nil
-}
-
-// NewGateway creates a new gateway instance
-func NewGateway(ctx context.Context, logger *zap.Logger, privKey crypto.PrivKey, cfg *config.Configuration) (*Gateway, error) {
-	return NewGatewayWithConfig(ctx, logger, privKey, cfg)
+	return g, nil
 }
 
 // StartHTTPServer starts the HTTP server on the specified port
@@ -286,12 +241,12 @@ func (g *Gateway) RequestInference(ctx context.Context, workerID, input string) 
 	if err != nil {
 		return "", fmt.Errorf("invalid worker peer ID: %w", err)
 	}
-	peerInfo, err := g.DHT.FindPeer(ctx, pid)
+	peerInfo, err := g.peer.DHT.FindPeer(ctx, pid)
 	if err != nil {
 		return "", fmt.Errorf("could not find worker peer: %w", err)
 	}
 	g.logger.Debug("Opening stream to worker", zap.String("peer_id", peerInfo.ID.String()))
-	stream, err := g.Host.NewStream(ctx, peerInfo.ID, InferenceProtocol)
+	stream, err := g.peer.Host.NewStream(ctx, peerInfo.ID, InferenceProtocol)
 	if err != nil {
 		return "", fmt.Errorf("failed to open stream: %w", err)
 	}
@@ -334,22 +289,17 @@ func (g *Gateway) RequestInference(ctx context.Context, workerID, input string) 
 
 // DiscoverPeers searches for available peers in the DHT
 func (g *Gateway) DiscoverPeers(ctx context.Context) ([]*crowdllama.Resource, error) {
-	peers, err := discovery.DiscoverPeers(ctx, g.DHT, g.logger, g.peerManager)
+	peers, err := discovery.DiscoverPeers(ctx, g.peer.DHT, g.logger, g.peer.PeerManager)
 	if err != nil {
 		return nil, fmt.Errorf("discover peers: %w", err)
 	}
 	return peers, nil
 }
 
-// SetPeerManager sets the peer manager from a peer
-func (g *Gateway) SetPeerManager(peerManager *peermanager.Manager) {
-	g.peerManager = peerManager
-}
-
 // GetAvailablePeers returns all available peers with their details
 func (g *Gateway) GetAvailablePeers() map[string]*crowdllama.Resource {
 	result := make(map[string]*crowdllama.Resource)
-	for peerID, info := range g.peerManager.GetHealthyPeers() {
+	for peerID, info := range g.peer.PeerManager.GetHealthyPeers() {
 		if info.Metadata != nil {
 			result[peerID] = info.Metadata
 		}
@@ -360,7 +310,7 @@ func (g *Gateway) GetAvailablePeers() map[string]*crowdllama.Resource {
 // GetAvailableWorkers returns only worker peers
 func (g *Gateway) GetAvailableWorkers() map[string]*crowdllama.Resource {
 	result := make(map[string]*crowdllama.Resource)
-	for peerID, info := range g.peerManager.GetHealthyPeers() {
+	for peerID, info := range g.peer.PeerManager.GetHealthyPeers() {
 		if info.Metadata != nil && info.Metadata.WorkerMode {
 			result[peerID] = info.Metadata
 		}
@@ -425,7 +375,7 @@ func (g *Gateway) StartBackgroundDiscovery() {
 	g.logger.Info("Starting background worker discovery")
 
 	// Start the peer manager
-	g.peerManager.Start()
+	g.peer.PeerManager.Start()
 
 	go func() {
 		// Use shorter interval for testing environments
@@ -467,7 +417,7 @@ func (g *Gateway) runDiscovery() {
 	skippedCount := 0
 	for _, peer := range peers {
 		// Check if this peer is already marked as unhealthy or recently removed
-		if g.peerManager.IsPeerUnhealthy(peer.PeerID) {
+		if g.peer.PeerManager.IsPeerUnhealthy(peer.PeerID) {
 			g.logger.Debug("Skipping unhealthy peer",
 				zap.String("peer_id", peer.PeerID))
 			skippedCount++
@@ -475,7 +425,7 @@ func (g *Gateway) runDiscovery() {
 		}
 
 		// Additional check: skip peers with old metadata
-		if time.Since(peer.LastUpdated) > g.peerManager.GetConfig().MaxMetadataAge {
+		if time.Since(peer.LastUpdated) > 1*time.Minute {
 			g.logger.Debug("Skipping peer with old metadata",
 				zap.String("peer_id", peer.PeerID),
 				zap.Time("last_updated", peer.LastUpdated))
@@ -483,7 +433,7 @@ func (g *Gateway) runDiscovery() {
 			continue
 		}
 
-		g.peerManager.AddOrUpdatePeer(peer.PeerID, peer)
+		g.peer.PeerManager.AddOrUpdatePeer(peer.PeerID, peer)
 		updatedCount++
 	}
 
@@ -491,14 +441,14 @@ func (g *Gateway) runDiscovery() {
 		g.logger.Info("Background discovery completed",
 			zap.Int("updated_count", updatedCount),
 			zap.Int("skipped_count", skippedCount),
-			zap.Int("total_workers", len(g.peerManager.GetAllPeers())))
+			zap.Int("total_workers", len(g.peer.PeerManager.GetAllPeers())))
 	}
 }
 
 // GetWorkerHealthStatus returns detailed health information about all workers
 func (g *Gateway) GetWorkerHealthStatus() map[string]map[string]interface{} {
 	result := make(map[string]map[string]interface{})
-	for peerID, info := range g.peerManager.GetAllPeers() {
+	for peerID, info := range g.peer.PeerManager.GetAllPeers() {
 		result[peerID] = map[string]interface{}{
 			"is_healthy":        info.IsHealthy,
 			"last_seen":         info.LastSeen,
@@ -519,7 +469,7 @@ func (g *Gateway) StopBackgroundDiscovery() {
 	if g.discoveryCancel != nil {
 		g.discoveryCancel()
 	}
-	g.peerManager.Stop()
+	g.peer.PeerManager.Stop()
 }
 
 // handleHealth handles the /api/health endpoint
