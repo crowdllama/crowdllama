@@ -92,8 +92,8 @@ func TestNewDHTServerWithCustomAddrs(t *testing.T) {
 	defer cleanupTestDir(t)
 
 	customAddrs := []string{
-		"/ip4/0.0.0.0/tcp/9001",
-		"/ip4/0.0.0.0/tcp/9002",
+		"/ip4/127.0.0.1/tcp/9001",
+		"/ip4/127.0.0.1/tcp/9002",
 	}
 
 	server := createTestDHTServer(ctx, t, privKey, logger, customAddrs)
