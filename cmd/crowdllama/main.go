@@ -256,13 +256,18 @@ func runWorkerMode() {
 	// Start Ollama server in worker mode
 	logger.Info("Starting Ollama server for worker mode")
 
-	ollamaCmd.SetArgs([]string{"serve_ollama"})
+	// Skip starting Ollama if in test mode
+	if os.Getenv("CROWDLLAMA_TEST_MODE") == "1" {
+		logger.Info("Test mode detected, skipping Ollama server start")
+	} else {
+		ollamaCmd.SetArgs([]string{"serve_ollama"})
 
-	go func() {
-		if err := ollamaCmd.Execute(); err != nil {
-			logger.Error("Failed to execute serve_ollama command", zap.Error(err))
-		}
-	}()
+		go func() {
+			if err := ollamaCmd.Execute(); err != nil {
+				logger.Error("Failed to execute serve_ollama command", zap.Error(err))
+			}
+		}()
+	}
 
 	// Start peer statistics logging
 	startPeerStatsLogging(ctx, p, logger)
