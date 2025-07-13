@@ -184,8 +184,8 @@ func (s *Server) Start() (string, error) {
 		},
 	})
 
-	// Start periodic worker discovery
-	go s.discoverWorkersPeriodically()
+	// Start periodic peer discovery
+	go s.discoverPeersPeriodically()
 
 	s.logger.Info("Bootstrapping DHT network")
 	if err := s.DHT.Bootstrap(s.ctx); err != nil {
@@ -313,6 +313,29 @@ func (s *Server) LogNATStatus() {
 		zap.Int("external_connections", stats["external_connections"].(int)))
 }
 
+// LogPeerStats logs current peer statistics
+func (s *Server) LogPeerStats() {
+	healthyPeers := s.peerManager.GetHealthyPeers()
+	totalPeers := len(healthyPeers)
+	workerPeers := 0
+	consumerPeers := 0
+
+	for _, peerInfo := range healthyPeers {
+		if peerInfo.Metadata != nil {
+			if peerInfo.Metadata.WorkerMode {
+				workerPeers++
+			} else {
+				consumerPeers++
+			}
+		}
+	}
+
+	s.logger.Info("Peer statistics",
+		zap.Int("total_peers", totalPeers),
+		zap.Int("worker_peers", workerPeers),
+		zap.Int("consumer_peers", consumerPeers))
+}
+
 // handlePeerConnected handles when a peer connects
 func (s *Server) handlePeerConnected(_ network.Network, conn network.Conn) {
 	peerID := conn.RemotePeer().String()
@@ -352,8 +375,8 @@ func (s *Server) handlePeerDisconnected(_ network.Network, conn network.Conn) {
 		zap.String("peer_id", peerID))
 }
 
-// discoverWorkersPeriodically periodically discovers workers advertising the namespace
-func (s *Server) discoverWorkersPeriodically() {
+// discoverPeersPeriodically periodically discovers peers advertising the namespace
+func (s *Server) discoverPeersPeriodically() {
 	s.peerManager.Start()
 	discoveryInterval := 10 * time.Second
 	if os.Getenv("CROWDLLAMA_TEST_MODE") == "1" {
@@ -367,54 +390,63 @@ func (s *Server) discoverWorkersPeriodically() {
 	}
 	natTicker := time.NewTicker(natLogInterval)
 	defer natTicker.Stop()
-	namespaceCID := s.getWorkerNamespaceCID()
-	s.logger.Info("Starting periodic worker discovery",
+	statsLogInterval := 15 * time.Second
+	if os.Getenv("CROWDLLAMA_TEST_MODE") == "1" {
+		statsLogInterval = 5 * time.Second
+	}
+	statsTicker := time.NewTicker(statsLogInterval)
+	defer statsTicker.Stop()
+	namespaceCID := s.getPeerNamespaceCID()
+	s.logger.Info("Starting periodic peer discovery",
 		zap.String("namespace_cid", namespaceCID.String()),
 		zap.Duration("interval", discoveryInterval))
 	for {
 		select {
 		case <-ticker.C:
-			s.handleWorkerDiscovery(namespaceCID)
+			s.handlePeerDiscovery(namespaceCID)
 		case <-natTicker.C:
 			s.LogNATStatus()
+		case <-statsTicker.C:
+			s.LogPeerStats()
 		case <-s.ctx.Done():
 			return
 		}
 	}
 }
 
-func (s *Server) handleWorkerDiscovery(namespaceCID cid.Cid) {
-	s.logger.Debug("Searching for workers advertising namespace",
+func (s *Server) handlePeerDiscovery(namespaceCID cid.Cid) {
+	s.logger.Debug("Searching for peers advertising namespace",
 		zap.String("namespace_cid", namespaceCID.String()))
 	providers := s.DHT.FindProvidersAsync(context.Background(), namespaceCID, 10)
-	workerCount := 0
+	peerCount := 0
 	for provider := range providers {
-		workerPeerID := provider.ID.String()
-		if s.peerManager.IsPeerUnhealthy(workerPeerID) {
-			s.logger.Debug("Skipping unhealthy worker",
-				zap.String("worker_peer_id", workerPeerID))
+		peerID := provider.ID.String()
+		if s.peerManager.IsPeerUnhealthy(peerID) {
+			s.logger.Debug("Skipping unhealthy peer",
+				zap.String("peer_id", peerID))
 			continue
 		}
-		workerCount++
-		s.logger.Info("Found worker",
-			zap.String("worker_peer_id", workerPeerID),
+		peerCount++
+		s.logger.Info("Found peer",
+			zap.String("peer_id", peerID),
 			zap.Strings("addresses", s.multiaddrsToStrings(provider.Addrs)))
-		metadata, err := s.requestWorkerMetadata(context.Background(), provider.ID)
+		metadata, err := s.requestPeerMetadata(context.Background(), provider.ID)
 		if err != nil {
-			s.logger.Error("Failed to get metadata from worker",
-				zap.String("worker_peer_id", workerPeerID),
+			s.logger.Error("Failed to get metadata from peer",
+				zap.String("peer_id", peerID),
 				zap.Error(err))
 			continue
 		}
 		if err := s.peerManager.ValidateMetadata(metadata); err != nil {
-			s.logger.Warn("Metadata validation failed, skipping worker",
-				zap.String("worker_peer_id", provider.ID.String()),
+			s.logger.Warn("Metadata validation failed, skipping peer",
+				zap.String("peer_id", provider.ID.String()),
 				zap.Error(err))
 			continue
 		}
 		s.peerManager.AddOrUpdatePeer(provider.ID.String(), metadata)
-		s.logger.Info("Worker metadata retrieved successfully",
-			zap.String("worker_peer_id", provider.ID.String()),
+		s.logger.Info("Peer metadata retrieved successfully",
+			zap.String("peer_id", provider.ID.String()),
+			zap.Bool("worker_mode", metadata.WorkerMode),
 			zap.String("gpu_model", metadata.GPUModel),
 			zap.Int("vram_gb", metadata.VRAMGB),
 			zap.Float64("tokens_throughput", metadata.TokensThroughput),
@@ -422,30 +454,30 @@ func (s *Server) handleWorkerDiscovery(namespaceCID cid.Cid) {
 			zap.Strings("supported_models", metadata.SupportedModels),
 			zap.Time("last_updated", metadata.LastUpdated))
 	}
-	if workerCount == 0 {
-		s.logger.Debug("No workers found advertising namespace",
+	if peerCount == 0 {
+		s.logger.Debug("No peers found advertising namespace",
 			zap.String("namespace_cid", namespaceCID.String()))
 	} else {
-		s.logger.Info("Worker discovery completed",
+		s.logger.Info("Peer discovery completed",
 			zap.String("namespace_cid", namespaceCID.String()),
-			zap.Int("total_workers_found", workerCount))
+			zap.Int("total_peers_found", peerCount))
 	}
 }
 
-// getWorkerNamespaceCID generates the same namespace CID as the worker
-func (s *Server) getWorkerNamespaceCID() cid.Cid {
-	namespaceCID, err := discovery.GetWorkerNamespaceCID()
+// getPeerNamespaceCID generates the same namespace CID as peers
+func (s *Server) getPeerNamespaceCID() cid.Cid {
+	namespaceCID, err := discovery.GetPeerNamespaceCID()
 	if err != nil {
 		panic("Failed to get namespace CID: " + err.Error())
 	}
 	return namespaceCID
 }
 
-// requestWorkerMetadata requests metadata from a worker peer
-func (s *Server) requestWorkerMetadata(ctx context.Context, workerPeer peer.ID) (*crowdllama.Resource, error) {
-	metadata, err := discovery.RequestWorkerMetadata(ctx, s.Host, workerPeer, s.logger)
+// requestPeerMetadata requests metadata from a peer
+func (s *Server) requestPeerMetadata(ctx context.Context, peerID peer.ID) (*crowdllama.Resource, error) {
+	metadata, err := discovery.RequestPeerMetadata(ctx, s.Host, peerID, s.logger)
 	if err != nil {
-		return nil, fmt.Errorf("request worker metadata: %w", err)
+		return nil, fmt.Errorf("request peer metadata: %w", err)
 	}
 	return metadata, nil
 }
