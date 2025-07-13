@@ -42,7 +42,7 @@ func (km *KeyManager) GetOrCreatePrivateKey() (crypto.PrivKey, error) {
 	// Check if the directory exists
 	keyDir := filepath.Dir(km.keyPath)
 	if _, err := os.Stat(keyDir); os.IsNotExist(err) {
-		km.logger.Info("Creating key directory", zap.String("path", keyDir))
+		km.logger.Debug("Creating key directory", zap.String("path", keyDir))
 		if err := os.MkdirAll(keyDir, 0o700); err != nil {
 			return nil, fmt.Errorf("failed to create directory %s: %w", keyDir, err)
 		}
@@ -50,7 +50,7 @@ func (km *KeyManager) GetOrCreatePrivateKey() (crypto.PrivKey, error) {
 
 	// Check if the key file exists
 	if _, err := os.Stat(km.keyPath); os.IsNotExist(err) {
-		km.logger.Info("Generating new private key", zap.String("path", km.keyPath))
+		km.logger.Debug("Generating new private key", zap.String("path", km.keyPath))
 
 		// Generate new private key
 		privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
@@ -69,7 +69,7 @@ func (km *KeyManager) GetOrCreatePrivateKey() (crypto.PrivKey, error) {
 		}
 
 		peerID := getPeerIDFromKey(privKey)
-		km.logger.Info("Successfully generated and saved private key",
+		km.logger.Debug("Successfully generated and saved private key",
 			zap.String("path", km.keyPath),
 			zap.String("peer_id", peerID))
 
@@ -77,7 +77,7 @@ func (km *KeyManager) GetOrCreatePrivateKey() (crypto.PrivKey, error) {
 	}
 
 	// Load existing key
-	km.logger.Info("Loading existing private key", zap.String("path", km.keyPath))
+	km.logger.Debug("Loading existing private key", zap.String("path", km.keyPath))
 
 	keyBytes, err := os.ReadFile(km.keyPath)
 	if err != nil {
@@ -90,7 +90,7 @@ func (km *KeyManager) GetOrCreatePrivateKey() (crypto.PrivKey, error) {
 	}
 
 	peerID := getPeerIDFromKey(privKey)
-	km.logger.Info("Successfully loaded private key",
+	km.logger.Debug("Successfully loaded private key",
 		zap.String("path", km.keyPath),
 		zap.String("peer_id", peerID))
 
@@ -99,7 +99,7 @@ func (km *KeyManager) GetOrCreatePrivateKey() (crypto.PrivKey, error) {
 
 // LoadPrivateKey loads a private key from the specified path without creating one
 func (km *KeyManager) LoadPrivateKey() (crypto.PrivKey, error) {
-	km.logger.Info("Loading private key", zap.String("path", km.keyPath))
+	km.logger.Debug("Loading private key", zap.String("path", km.keyPath))
 
 	keyBytes, err := os.ReadFile(km.keyPath)
 	if err != nil {
@@ -112,7 +112,7 @@ func (km *KeyManager) LoadPrivateKey() (crypto.PrivKey, error) {
 	}
 
 	peerID := getPeerIDFromKey(privKey)
-	km.logger.Info("Successfully loaded private key",
+	km.logger.Debug("Successfully loaded private key",
 		zap.String("path", km.keyPath),
 		zap.String("peer_id", peerID))
 

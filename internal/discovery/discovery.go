@@ -4,7 +4,6 @@ package discovery
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -46,7 +45,7 @@ const (
 )
 
 // NewHostAndDHT creates a libp2p host with DHT
-func NewHostAndDHT(ctx context.Context, privKey crypto.PrivKey) (host.Host, *dht.IpfsDHT, error) {
+func NewHostAndDHT(ctx context.Context, privKey crypto.PrivKey, logger *zap.Logger) (host.Host, *dht.IpfsDHT, error) {
 	libp2pOpts := []libp2p.Option{
 		libp2p.ListenAddrStrings(defaultListenAddrs...),
 		libp2p.Identity(privKey),
@@ -85,12 +84,12 @@ func NewHostAndDHT(ctx context.Context, privKey crypto.PrivKey) (host.Host, *dht
 }
 
 // BootstrapDHT connects to bootstrap peers. If customPeers is nil, use a local bootstrap address for fast local discovery.
-func BootstrapDHT(ctx context.Context, h host.Host, kadDHT *dht.IpfsDHT) error {
-	return BootstrapDHTWithPeers(ctx, h, kadDHT, nil)
+func BootstrapDHT(ctx context.Context, h host.Host, kadDHT *dht.IpfsDHT, logger *zap.Logger) error {
+	return BootstrapDHTWithPeers(ctx, h, kadDHT, nil, logger)
 }
 
 // BootstrapDHTWithPeers connects to custom bootstrap peers. If customPeers is nil or empty, use defaults.
-func BootstrapDHTWithPeers(ctx context.Context, h host.Host, kadDHT *dht.IpfsDHT, customPeers []string) error {
+func BootstrapDHTWithPeers(ctx context.Context, h host.Host, kadDHT *dht.IpfsDHT, customPeers []string, logger *zap.Logger) error {
 	var bootstrapPeers []peer.AddrInfo
 
 	if len(customPeers) > 0 {
@@ -98,12 +97,12 @@ func BootstrapDHTWithPeers(ctx context.Context, h host.Host, kadDHT *dht.IpfsDHT
 		for _, peerAddr := range customPeers {
 			addr, err := multiaddr.NewMultiaddr(peerAddr)
 			if err != nil {
-				log.Printf("Failed to parse custom bootstrap peer address %s: %v", peerAddr, err)
+				logger.Debug("Failed to parse custom bootstrap peer address", zap.String("peer_addr", peerAddr), zap.Error(err))
 				continue
 			}
 			peerInfo, err := peer.AddrInfoFromP2pAddr(addr)
 			if err != nil {
-				log.Printf("Failed to parse custom bootstrap peer info %s: %v", peerAddr, err)
+				logger.Debug("Failed to parse custom bootstrap peer info", zap.String("peer_addr", peerAddr), zap.Error(err))
 				continue
 			}
 			bootstrapPeers = append(bootstrapPeers, *peerInfo)
@@ -116,7 +115,7 @@ func BootstrapDHTWithPeers(ctx context.Context, h host.Host, kadDHT *dht.IpfsDHT
 		if err == nil {
 			peerInfo, err := peer.AddrInfoFromP2pAddr(addr)
 			if err != nil {
-				log.Printf("Failed to parse bootstrap peer info: %v", err)
+				logger.Debug("Failed to parse bootstrap peer info", zap.Error(err))
 				// fallback to default public bootstrap peers
 				bootstrapPeers = dht.GetDefaultBootstrapPeerAddrInfos()
 			} else {
@@ -130,9 +129,9 @@ func BootstrapDHTWithPeers(ctx context.Context, h host.Host, kadDHT *dht.IpfsDHT
 
 	for _, peerInfo := range bootstrapPeers {
 		if err := h.Connect(ctx, peerInfo); err != nil {
-			log.Printf("Failed to connect to bootstrap %s: %v", peerInfo.ID, err)
+			logger.Debug("Failed to connect to bootstrap", zap.String("peer_id", peerInfo.ID.String()), zap.Error(err))
 		} else {
-			log.Printf("Connected to bootstrap: %s", peerInfo.ID)
+			logger.Debug("Connected to bootstrap", zap.String("peer_id", peerInfo.ID.String()))
 		}
 	}
 	if err := kadDHT.Bootstrap(ctx); err != nil {
@@ -142,7 +141,7 @@ func BootstrapDHTWithPeers(ctx context.Context, h host.Host, kadDHT *dht.IpfsDHT
 }
 
 // AdvertiseModel periodically announces model availability
-func AdvertiseModel(ctx context.Context, kadDHT *dht.IpfsDHT, namespace string) {
+func AdvertiseModel(ctx context.Context, kadDHT *dht.IpfsDHT, namespace string, logger *zap.Logger) {
 	ticker := time.NewTicker(advertiseInterval)
 	defer ticker.Stop()
 
@@ -151,14 +150,14 @@ func AdvertiseModel(ctx context.Context, kadDHT *dht.IpfsDHT, namespace string) 
 		case <-ticker.C:
 			c, err := cid.Parse(namespace)
 			if err != nil {
-				log.Printf("Failed to parse namespace as CID: %v", err)
+				logger.Debug("Failed to parse namespace as CID", zap.Error(err))
 				continue
 			}
 			err = kadDHT.Provide(ctx, c, true)
 			if err != nil {
-				log.Printf("Failed to advertise model: %v", err)
+				logger.Debug("Failed to advertise model", zap.Error(err))
 			} else {
-				log.Printf("Model advertised successfully")
+				logger.Debug("Model advertised successfully")
 			}
 		case <-ctx.Done():
 			return
@@ -287,7 +286,7 @@ func processProvider(
 	},
 ) *crowdllama.Resource {
 	peerID := provider.ID.String()
-	logger.Info("Found peer provider", zap.String("peer_id", peerID))
+	logger.Debug("Found peer provider", zap.String("peer_id", peerID))
 
 	// Check if this peer is already marked as unhealthy or recently removed
 	if peerManager != nil && peerManager.IsPeerUnhealthy(peerID) {
@@ -302,7 +301,7 @@ func processProvider(
 	// Request metadata from the peer
 	metadata, err := RequestPeerMetadata(ctx, kadDHT.Host(), provider.ID, logger)
 	if err != nil {
-		logger.Warn("Failed to get metadata from peer, skipping",
+		logger.Debug("Failed to get metadata from peer, skipping",
 			zap.String("peer_id", peerID),
 			zap.Error(err))
 
@@ -315,13 +314,13 @@ func processProvider(
 
 	// Verify the metadata is recent (within last hour)
 	if time.Since(metadata.LastUpdated) > 1*time.Hour {
-		logger.Warn("Metadata from peer is too old, skipping",
+		logger.Debug("Metadata from peer is too old, skipping",
 			zap.String("peer_id", peerID),
 			zap.Time("last_updated", metadata.LastUpdated))
 		return nil
 	}
 
-	logger.Info("Found peer",
+	logger.Debug("Found peer",
 		zap.String("peer_id", peerID),
 		zap.String("gpu_model", metadata.GPUModel),
 		zap.Strings("supported_models", metadata.SupportedModels))
@@ -343,7 +342,7 @@ func DiscoverPeers(ctx context.Context, kadDHT *dht.IpfsDHT, logger *zap.Logger,
 		return nil, fmt.Errorf("failed to get namespace CID: %w", err)
 	}
 
-	logger.Info("Searching for peers with namespace CID",
+	logger.Debug("Searching for peers with namespace CID",
 		zap.String("namespace", crowdllama.PeerNamespace),
 		zap.String("cid", namespaceCID.String()))
 
@@ -359,7 +358,7 @@ func DiscoverPeers(ctx context.Context, kadDHT *dht.IpfsDHT, logger *zap.Logger,
 		}
 	}
 
-	logger.Info("Discovery complete",
+	logger.Debug("Discovery complete",
 		zap.Int("providers_found", providerCount),
 		zap.Int("peers_with_metadata", len(peers)))
 
