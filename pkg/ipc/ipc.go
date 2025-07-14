@@ -193,11 +193,11 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	s.logger.Info("IPC connection established", zap.String("remote", conn.RemoteAddr().String()))
 
-	buffer := make([]byte, 4096)
 	for {
-		n, err := conn.Read(buffer)
+		// Try to read 4 bytes for a length prefix
+		lengthBytes := make([]byte, 4)
+		_, err := conn.Read(lengthBytes)
 		if err != nil {
-			// EOF is normal when client closes connection after sending message
 			if err.Error() == "EOF" {
 				s.logger.Info("IPC connection closed by client (EOF)")
 			} else {
@@ -206,9 +206,34 @@ func (s *Server) handleConnection(conn net.Conn) {
 			break
 		}
 
-		if n > 0 {
-			s.handleMessage(buffer[:n], conn)
+		length := int(uint32(lengthBytes[0])<<24 | uint32(lengthBytes[1])<<16 | uint32(lengthBytes[2])<<8 | uint32(lengthBytes[3]))
+		if length > 0 && length < 10*1024*1024 {
+			// Looks like a valid length-prefixed protobuf message
+			msgBytes := make([]byte, length)
+			_, err := conn.Read(msgBytes)
+			if err != nil {
+				s.logger.Error("Failed to read protobuf message from IPC connection", zap.Error(err))
+				break
+			}
+			s.handleProtobufMessage(msgBytes, conn)
+			continue
 		}
+
+		// If not a valid length, treat as JSON (read until EOF or newline)
+		// We'll read up to 4096 bytes for a JSON message
+		buffer := make([]byte, 4096)
+		copy(buffer, lengthBytes)
+		n, err := conn.Read(buffer[4:])
+		if err != nil {
+			if err.Error() == "EOF" {
+				s.logger.Info("IPC connection closed by client (EOF)")
+			} else {
+				s.logger.Error("Failed to read from IPC connection (JSON fallback)", zap.Error(err))
+			}
+			break
+		}
+		totalLen := 4 + n
+		s.handleMessage(buffer[:totalLen], conn)
 	}
 
 	s.logger.Info("IPC connection closed", zap.String("remote", conn.RemoteAddr().String()))
@@ -223,9 +248,12 @@ func (s *Server) handleMessage(message []byte, conn net.Conn) {
 	// First, try to parse as a base message to get the type
 	var baseMsg BaseMessage
 	if err := json.Unmarshal(message, &baseMsg); err != nil {
-		s.logger.Warn("Failed to parse IPC message as JSON",
+		s.logger.Warn("Failed to parse IPC message as JSON, trying as protobuf",
 			zap.Error(err),
 			zap.String("raw", string(message)))
+
+		// Try to handle as protobuf message
+		s.handleProtobufMessage(message, conn)
 		return
 	}
 
@@ -244,6 +272,44 @@ func (s *Server) handleMessage(message []byte, conn net.Conn) {
 	default:
 		s.handleUnknownMessage(baseMsg, conn)
 	}
+}
+
+// handleProtobufMessage handles protobuf messages directly
+func (s *Server) handleProtobufMessage(message []byte, conn net.Conn) {
+	var pbReq llamav1.BaseMessage
+	if err := proto.Unmarshal(message, &pbReq); err != nil {
+		s.logger.Error("Failed to unmarshal protobuf message", zap.Error(err))
+		s.sendErrorResponse(conn, "Invalid protobuf message format")
+		return
+	}
+
+	generateReq := pbReq.GetGenerateRequest()
+	if generateReq == nil {
+		s.logger.Error("No GenerateRequest in protobuf message")
+		s.sendErrorResponse(conn, "No GenerateRequest in protobuf message")
+		return
+	}
+
+	s.logger.Info("Received protobuf prompt message",
+		zap.String("model", generateReq.GetModel()),
+		zap.String("prompt", generateReq.GetPrompt()))
+
+	ctx := context.Background()
+	pbResp, err := s.apiHandler(ctx, &pbReq)
+	if err != nil {
+		s.logger.Error("Failed to process protobuf prompt", zap.Error(err))
+		s.sendErrorResponse(conn, fmt.Sprintf("Failed to process prompt: %v", err))
+		return
+	}
+
+	// Use length-prefixed format for response
+	if err := crowdllama.WriteLengthPrefixedPB(conn, pbResp); err != nil {
+		s.logger.Error("Failed to write length-prefixed PB response", zap.Error(err))
+		s.sendErrorResponse(conn, "Failed to write PB response")
+		return
+	}
+
+	s.logger.Info("Sent length-prefixed protobuf response")
 }
 
 // handlePingMessage handles ping messages
