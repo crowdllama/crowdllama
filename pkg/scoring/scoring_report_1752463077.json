@@ -1,0 +1,972 @@
+{
+  "test_start_time": "2025-07-14T03:12:45.430845668Z",
+  "test_duration": 312230969130,
+  "network_size": 11,
+  "peer_profiles": {
+    "bootstrap": "Stable Peer",
+    "high_perf_1": "High Performance Peer",
+    "high_perf_2": "High Performance Peer",
+    "load_balanced_1": "Load Balanced Peer",
+    "load_balanced_2": "Load Balanced Peer",
+    "low_latency_1": "Low Latency Peer",
+    "low_latency_2": "Low Latency Peer",
+    "stable_1": "Stable Peer",
+    "stable_2": "Stable Peer",
+    "unreliable_1": "Unreliable Peer",
+    "unreliable_2": "Unreliable Peer"
+  },
+  "algorithm_results": {
+    "Consensus": {
+      "algorithm": "Consensus",
+      "rankings": [
+        {
+          "rank": 1,
+          "peer_name": "high_perf_2",
+          "overall_score": 87.87819369211199,
+          "latency_score": 98.9,
+          "uptime_score": 100,
+          "performance_score": 92.17,
+          "reliability_score": 100
+        },
+        {
+          "rank": 2,
+          "peer_name": "high_perf_1",
+          "overall_score": 87.54819488558493,
+          "latency_score": 99,
+          "uptime_score": 100,
+          "performance_score": 90.79,
+          "reliability_score": 100
+        },
+        {
+          "rank": 3,
+          "peer_name": "bootstrap",
+          "overall_score": 83.1956995473471,
+          "latency_score": 96.9,
+          "uptime_score": 100,
+          "performance_score": 74.63999999999999,
+          "reliability_score": 100
+        },
+        {
+          "rank": 4,
+          "peer_name": "stable_2",
+          "overall_score": 83.03068648113963,
+          "latency_score": 96.9,
+          "uptime_score": 100,
+          "performance_score": 73.97999999999999,
+          "reliability_score": 100
+        },
+        {
+          "rank": 5,
+          "peer_name": "stable_1",
+          "overall_score": 83.01568768529887,
+          "latency_score": 96.9,
+          "uptime_score": 100,
+          "performance_score": 73.91999999999999,
+          "reliability_score": 100
+        },
+        {
+          "rank": 6,
+          "peer_name": "load_balanced_2",
+          "overall_score": 58.44961267069427,
+          "latency_score": 96.1,
+          "uptime_score": 94.28571428571428,
+          "performance_score": 81.85,
+          "reliability_score": 0
+        },
+        {
+          "rank": 7,
+          "peer_name": "low_latency_1",
+          "overall_score": 56.54180360053851,
+          "latency_score": 99.4,
+          "uptime_score": 94.44444444444444,
+          "performance_score": 72.08,
+          "reliability_score": 0
+        },
+        {
+          "rank": 8,
+          "peer_name": "low_latency_2",
+          "overall_score": 55.971802388195684,
+          "latency_score": 99.4,
+          "uptime_score": 94.44444444444444,
+          "performance_score": 69.8,
+          "reliability_score": 0
+        },
+        {
+          "rank": 9,
+          "peer_name": "load_balanced_1",
+          "overall_score": 48.37759705774856,
+          "latency_score": 96.2,
+          "uptime_score": 94.11764705882352,
+          "performance_score": 81.67,
+          "reliability_score": 0
+        },
+        {
+          "rank": 10,
+          "peer_name": "unreliable_2",
+          "overall_score": 44.761737265401244,
+          "latency_score": 87,
+          "uptime_score": 96.7741935483871,
+          "performance_score": 30.07,
+          "reliability_score": 0
+        },
+        {
+          "rank": 11,
+          "peer_name": "unreliable_1",
+          "overall_score": 44.62711863725941,
+          "latency_score": 88.4,
+          "uptime_score": 94.28571428571428,
+          "performance_score": 31.180000000000003,
+          "reliability_score": 0
+        }
+      ],
+      "statistics": {
+        "mean_score": 66.67255762830183,
+        "std_dev": 298.065264135275,
+        "score_range": 4.35249533823783,
+        "discrimination": 4.4705839214536045
+      },
+      "performance": {
+        "calculation_time": 5613,
+        "memory_usage": 0,
+        "scalability": "O(n)"
+      }
+    },
+    "Economic": {
+      "algorithm": "Economic",
+      "rankings": [
+        {
+          "rank": 1,
+          "peer_name": "high_perf_2",
+          "overall_score": 90.3775,
+          "latency_score": 98.9,
+          "uptime_score": 100,
+          "performance_score": 92.17,
+          "reliability_score": 100
+        },
+        {
+          "rank": 2,
+          "peer_name": "high_perf_1",
+          "overall_score": 90.0475,
+          "latency_score": 99,
+          "uptime_score": 100,
+          "performance_score": 90.79,
+          "reliability_score": 100
+        },
+        {
+          "rank": 3,
+          "peer_name": "bootstrap",
+          "overall_score": 88.195,
+          "latency_score": 96.9,
+          "uptime_score": 100,
+          "performance_score": 74.63999999999999,
+          "reliability_score": 100
+        },
+        {
+          "rank": 4,
+          "peer_name": "stable_2",
+          "overall_score": 88.03,
+          "latency_score": 96.9,
+          "uptime_score": 100,
+          "performance_score": 73.97999999999999,
+          "reliability_score": 100
+        },
+        {
+          "rank": 5,
+          "peer_name": "stable_1",
+          "overall_score": 88.01499999999999,
+          "latency_score": 96.9,
+          "uptime_score": 100,
+          "performance_score": 73.91999999999999,
+          "reliability_score": 100
+        },
+        {
+          "rank": 6,
+          "peer_name": "load_balanced_2",
+          "overall_score": 67.48464285714286,
+          "latency_score": 96.1,
+          "uptime_score": 94.28571428571428,
+          "performance_score": 81.85,
+          "reliability_score": 0
+        },
+        {
+          "rank": 7,
+          "peer_name": "load_balanced_1",
+          "overall_score": 67.4210294117647,
+          "latency_score": 96.2,
+          "uptime_score": 94.11764705882352,
+          "performance_score": 81.67,
+          "reliability_score": 0
+        },
+        {
+          "rank": 8,
+          "peer_name": "low_latency_1",
+          "overall_score": 61.81888888888889,
+          "latency_score": 99.4,
+          "uptime_score": 94.44444444444444,
+          "performance_score": 72.08,
+          "reliability_score": 0
+        },
+        {
+          "rank": 9,
+          "peer_name": "low_latency_2",
+          "overall_score": 61.248888888888885,
+          "latency_score": 99.4,
+          "uptime_score": 94.44444444444444,
+          "performance_score": 69.8,
+          "reliability_score": 0
+        },
+        {
+          "rank": 10,
+          "peer_name": "unreliable_2",
+          "overall_score": 49.92233870967742,
+          "latency_score": 87,
+          "uptime_score": 96.7741935483871,
+          "performance_score": 30.07,
+          "reliability_score": 0
+        },
+        {
+          "rank": 11,
+          "peer_name": "unreliable_1",
+          "overall_score": 49.91214285714286,
+          "latency_score": 88.4,
+          "uptime_score": 94.28571428571428,
+          "performance_score": 31.180000000000003,
+          "reliability_score": 0
+        }
+      ],
+      "statistics": {
+        "mean_score": 72.95208469213686,
+        "std_dev": 242.28056283619816,
+        "score_range": 0.01500000000001478,
+        "discrimination": 3.3210916981829905
+      },
+      "performance": {
+        "calculation_time": 6815,
+        "memory_usage": 0,
+        "scalability": "O(n)"
+      }
+    },
+    "Geographic Proximity": {
+      "algorithm": "Geographic Proximity",
+      "rankings": [
+        {
+          "rank": 1,
+          "peer_name": "high_perf_2",
+          "overall_score": 97.3133888888889,
+          "latency_score": 98.9,
+          "uptime_score": 100,
+          "performance_score": 92.17,
+          "reliability_score": 100
+        },
+        {
+          "rank": 2,
+          "peer_name": "high_perf_1",
+          "overall_score": 97.06654058048912,
+          "latency_score": 99,
+          "uptime_score": 100,
+          "performance_score": 90.79,
+          "reliability_score": 100
+        },
+        {
+          "rank": 3,
+          "peer_name": "bootstrap",
+          "overall_score": 92.80017199677505,
+          "latency_score": 96.9,
+          "uptime_score": 100,
+          "performance_score": 74.63999999999999,
+          "reliability_score": 100
+        },
+        {
+          "rank": 4,
+          "peer_name": "stable_2",
+          "overall_score": 92.61855555555556,
+          "latency_score": 96.9,
+          "uptime_score": 100,
+          "performance_score": 73.97999999999999,
+          "reliability_score": 100
+        },
+        {
+          "rank": 5,
+          "peer_name": "stable_1",
+          "overall_score": 92.612,
+          "latency_score": 96.9,
+          "uptime_score": 100,
+          "performance_score": 73.91999999999999,
+          "reliability_score": 100
+        },
+        {
+          "rank": 6,
+          "peer_name": "load_balanced_2",
+          "overall_score": 77.01653174603175,
+          "latency_score": 96.1,
+          "uptime_score": 94.28571428571428,
+          "performance_score": 81.85,
+          "reliability_score": 0
+        },
+        {
+          "rank": 7,
+          "peer_name": "load_balanced_1",
+          "overall_score": 76.83908496732026,
+          "latency_score": 96.2,
+          "uptime_score": 94.11764705882352,
+          "performance_score": 81.67,
+          "reliability_score": 0
+        },
+        {
+          "rank": 8,
+          "peer_name": "low_latency_1",
+          "overall_score": 76.78888888888889,
+          "latency_score": 99.4,
+          "uptime_score": 94.44444444444444,
+          "performance_score": 72.08,
+          "reliability_score": 0
+        },
+        {
+          "rank": 9,
+          "peer_name": "low_latency_2",
+          "overall_score": 76.2188888888889,
+          "latency_score": 99.4,
+          "uptime_score": 94.44444444444444,
+          "performance_score": 69.8,
+          "reliability_score": 0
+        },
+        {
+          "rank": 10,
+          "peer_name": "unreliable_1",
+          "overall_score": 44.33214285714286,
+          "latency_score": 88.4,
+          "uptime_score": 94.28571428571428,
+          "performance_score": 31.180000000000003,
+          "reliability_score": 0
+        },
+        {
+          "rank": 11,
+          "peer_name": "unreliable_2",
+          "overall_score": 44.27233870967743,
+          "latency_score": 87,
+          "uptime_score": 96.7741935483871,
+          "performance_score": 30.07,
+          "reliability_score": 0
+        }
+      ],
+      "statistics": {
+        "mean_score": 78.89804846178716,
+        "std_dev": 331.996380131708,
+        "score_range": 0.0065555555555647516,
+        "discrimination": 4.207916248936176
+      },
+      "performance": {
+        "calculation_time": 31810,
+        "memory_usage": 0,
+        "scalability": "O(n)"
+      }
+    },
+    "Latency Optimized": {
+      "algorithm": "Latency Optimized",
+      "rankings": [
+        {
+          "rank": 1,
+          "peer_name": "high_perf_2",
+          "overall_score": 97.38550000000001,
+          "latency_score": 97.6,
+          "uptime_score": 100,
+          "performance_score": 92.17,
+          "reliability_score": 100
+        },
+        {
+          "rank": 2,
+          "peer_name": "high_perf_1",
+          "overall_score": 97.29849999999999,
+          "latency_score": 97.8,
+          "uptime_score": 100,
+          "performance_score": 90.79,
+          "reliability_score": 100
+        },
+        {
+          "rank": 3,
+          "peer_name": "bootstrap",
+          "overall_score": 92.476,
+          "latency_score": 93.8,
+          "uptime_score": 100,
+          "performance_score": 74.63999999999999,
+          "reliability_score": 100
+        },
+        {
+          "rank": 4,
+          "peer_name": "stable_2",
+          "overall_score": 92.377,
+          "latency_score": 93.8,
+          "uptime_score": 100,
+          "performance_score": 73.97999999999999,
+          "reliability_score": 100
+        },
+        {
+          "rank": 5,
+          "peer_name": "stable_1",
+          "overall_score": 92.368,
+          "latency_score": 93.8,
+          "uptime_score": 100,
+          "performance_score": 73.91999999999999,
+          "reliability_score": 100
+        },
+        {
+          "rank": 6,
+          "peer_name": "low_latency_1",
+          "overall_score": 84.25866666666666,
+          "latency_score": 98.8,
+          "uptime_score": 94.44444444444444,
+          "performance_score": 72.08,
+          "reliability_score": 0
+        },
+        {
+          "rank": 7,
+          "peer_name": "low_latency_2",
+          "overall_score": 83.91666666666666,
+          "latency_score": 98.8,
+          "uptime_score": 94.44444444444444,
+          "performance_score": 69.8,
+          "reliability_score": 0
+        },
+        {
+          "rank": 8,
+          "peer_name": "load_balanced_2",
+          "overall_score": 81.86035714285715,
+          "latency_score": 92.4,
+          "uptime_score": 94.28571428571428,
+          "performance_score": 81.85,
+          "reliability_score": 0
+        },
+        {
+          "rank": 9,
+          "peer_name": "load_balanced_1",
+          "overall_score": 81.80814705882354,
+          "latency_score": 92.4,
+          "uptime_score": 94.11764705882352,
+          "performance_score": 81.67,
+          "reliability_score": 0
+        },
+        {
+          "rank": 10,
+          "peer_name": "unreliable_1",
+          "overall_score": 64.77985714285714,
+          "latency_score": 76.6,
+          "uptime_score": 94.28571428571428,
+          "performance_score": 31.180000000000003,
+          "reliability_score": 0
+        },
+        {
+          "rank": 11,
+          "peer_name": "unreliable_2",
+          "overall_score": 64.50662903225806,
+          "latency_score": 75.8,
+          "uptime_score": 96.7741935483871,
+          "performance_score": 30.07,
+          "reliability_score": 0
+        }
+      ],
+      "statistics": {
+        "mean_score": 84.8213930645572,
+        "std_dev": 119.95471237856451,
+        "score_range": 0.009000000000000341,
+        "discrimination": 1.414203516880081
+      },
+      "performance": {
+        "calculation_time": 26696,
+        "memory_usage": 0,
+        "scalability": "O(n)"
+      }
+    },
+    "Load Balanced": {
+      "algorithm": "Load Balanced",
+      "rankings": [
+        {
+          "rank": 1,
+          "peer_name": "high_perf_2",
+          "overall_score": 86.28566838,
+          "latency_score": 98.9,
+          "uptime_score": 100,
+          "performance_score": 92.17,
+          "reliability_score": 100
+        },
+        {
+          "rank": 2,
+          "peer_name": "high_perf_1",
+          "overall_score": 84.61425114,
+          "latency_score": 99,
+          "uptime_score": 100,
+          "performance_score": 90.79,
+          "reliability_score": 100
+        },
+        {
+          "rank": 3,
+          "peer_name": "bootstrap",
+          "overall_score": 75.47622143999999,
+          "latency_score": 96.9,
+          "uptime_score": 100,
+          "performance_score": 74.63999999999999,
+          "reliability_score": 100
+        },
+        {
+          "rank": 4,
+          "peer_name": "stable_2",
+          "overall_score": 75.15655792,
+          "latency_score": 96.9,
+          "uptime_score": 100,
+          "performance_score": 73.97999999999999,
+          "reliability_score": 100
+        },
+        {
+          "rank": 5,
+          "peer_name": "stable_1",
+          "overall_score": 75.12857088,
+          "latency_score": 96.9,
+          "uptime_score": 100,
+          "performance_score": 73.91999999999999,
+          "reliability_score": 100
+        },
+        {
+          "rank": 6,
+          "peer_name": "low_latency_1",
+          "overall_score": 56.26470200888889,
+          "latency_score": 99.4,
+          "uptime_score": 94.44444444444444,
+          "performance_score": 72.08,
+          "reliability_score": 0
+        },
+        {
+          "rank": 7,
+          "peer_name": "load_balanced_2",
+          "overall_score": 55.67974035714286,
+          "latency_score": 96.1,
+          "uptime_score": 94.28571428571428,
+          "performance_score": 81.85,
+          "reliability_score": 0
+        },
+        {
+          "rank": 8,
+          "peer_name": "load_balanced_1",
+          "overall_score": 55.57480679176471,
+          "latency_score": 96.2,
+          "uptime_score": 94.11764705882352,
+          "performance_score": 81.67,
+          "reliability_score": 0
+        },
+        {
+          "rank": 9,
+          "peer_name": "low_latency_2",
+          "overall_score": 54.675608888888895,
+          "latency_score": 99.4,
+          "uptime_score": 94.44444444444444,
+          "performance_score": 69.8,
+          "reliability_score": 0
+        },
+        {
+          "rank": 10,
+          "peer_name": "unreliable_1",
+          "overall_score": 42.79696317714286,
+          "latency_score": 88.4,
+          "uptime_score": 94.28571428571428,
+          "performance_score": 31.180000000000003,
+          "reliability_score": 0
+        },
+        {
+          "rank": 11,
+          "peer_name": "unreliable_2",
+          "overall_score": 42.77540888967743,
+          "latency_score": 87,
+          "uptime_score": 96.7741935483871,
+          "performance_score": 30.07,
+          "reliability_score": 0
+        }
+      ],
+      "statistics": {
+        "mean_score": 64.03895453395506,
+        "std_dev": 226.24008638396288,
+        "score_range": 1.671417240000011,
+        "discrimination": 3.5328510284159105
+      },
+      "performance": {
+        "calculation_time": 8264,
+        "memory_usage": 0,
+        "scalability": "O(n)"
+      }
+    },
+    "Reliability Optimized": {
+      "algorithm": "Reliability Optimized",
+      "rankings": [
+        {
+          "rank": 1,
+          "peer_name": "high_perf_2",
+          "overall_score": 92.37305379663022,
+          "latency_score": 98.9,
+          "uptime_score": 100,
+          "performance_score": 92.17,
+          "reliability_score": 80.34684598876736
+        },
+        {
+          "rank": 2,
+          "peer_name": "high_perf_1",
+          "overall_score": 92.11223281729515,
+          "latency_score": 99,
+          "uptime_score": 100,
+          "performance_score": 90.79,
+          "reliability_score": 80.34744272431713
+        },
+        {
+          "rank": 3,
+          "peer_name": "bootstrap",
+          "overall_score": 88.56793207966284,
+          "latency_score": 96.9,
+          "uptime_score": 100,
+          "performance_score": 74.63999999999999,
+          "reliability_score": 80.34977359887617
+        },
+        {
+          "rank": 4,
+          "peer_name": "stable_2",
+          "overall_score": 88.4339721515097,
+          "latency_score": 96.9,
+          "uptime_score": 100,
+          "performance_score": 73.97999999999999,
+          "reliability_score": 80.34324050503241
+        },
+        {
+          "rank": 5,
+          "peer_name": "stable_1",
+          "overall_score": 88.42215277521596,
+          "latency_score": 96.9,
+          "uptime_score": 100,
+          "performance_score": 73.91999999999999,
+          "reliability_score": 80.34384258405325
+        },
+        {
+          "rank": 6,
+          "peer_name": "load_balanced_2",
+          "overall_score": 65.785,
+          "latency_score": 96.1,
+          "uptime_score": 100,
+          "performance_score": 81.85,
+          "reliability_score": 0
+        },
+        {
+          "rank": 7,
+          "peer_name": "load_balanced_1",
+          "overall_score": 65.764,
+          "latency_score": 96.2,
+          "uptime_score": 100,
+          "performance_score": 81.67,
+          "reliability_score": 0
+        },
+        {
+          "rank": 8,
+          "peer_name": "low_latency_1",
+          "overall_score": 64.326,
+          "latency_score": 99.4,
+          "uptime_score": 100,
+          "performance_score": 72.08,
+          "reliability_score": 0
+        },
+        {
+          "rank": 9,
+          "peer_name": "low_latency_2",
+          "overall_score": 63.87,
+          "latency_score": 99.4,
+          "uptime_score": 100,
+          "performance_score": 69.8,
+          "reliability_score": 0
+        },
+        {
+          "rank": 10,
+          "peer_name": "unreliable_1",
+          "overall_score": 54.495999999999995,
+          "latency_score": 88.4,
+          "uptime_score": 100,
+          "performance_score": 31.180000000000003,
+          "reliability_score": 0
+        },
+        {
+          "rank": 11,
+          "peer_name": "unreliable_2",
+          "overall_score": 54.064,
+          "latency_score": 87,
+          "uptime_score": 100,
+          "performance_score": 30.07,
+          "reliability_score": 0
+        }
+      ],
+      "statistics": {
+        "mean_score": 74.38312214730125,
+        "std_dev": 218.35830653494443,
+        "score_range": 11.699999999999996,
+        "discrimination": 2.935589421784803
+      },
+      "performance": {
+        "calculation_time": 16854,
+        "memory_usage": 0,
+        "scalability": "O(n)"
+      }
+    },
+    "Standard": {
+      "algorithm": "Standard",
+      "rankings": [
+        {
+          "rank": 1,
+          "peer_name": "high_perf_2",
+          "overall_score": 97.376,
+          "latency_score": 98.9,
+          "uptime_score": 100,
+          "performance_score": 92.17,
+          "reliability_score": 100
+        },
+        {
+          "rank": 2,
+          "peer_name": "high_perf_1",
+          "overall_score": 96.987,
+          "latency_score": 99,
+          "uptime_score": 100,
+          "performance_score": 90.79,
+          "reliability_score": 100
+        },
+        {
+          "rank": 3,
+          "peer_name": "bootstrap",
+          "overall_score": 91.61699999999999,
+          "latency_score": 96.9,
+          "uptime_score": 100,
+          "performance_score": 74.63999999999999,
+          "reliability_score": 100
+        },
+        {
+          "rank": 4,
+          "peer_name": "stable_2",
+          "overall_score": 91.419,
+          "latency_score": 96.9,
+          "uptime_score": 100,
+          "performance_score": 73.97999999999999,
+          "reliability_score": 100
+        },
+        {
+          "rank": 5,
+          "peer_name": "stable_1",
+          "overall_score": 91.401,
+          "latency_score": 96.9,
+          "uptime_score": 100,
+          "performance_score": 73.91999999999999,
+          "reliability_score": 100
+        },
+        {
+          "rank": 6,
+          "peer_name": "load_balanced_2",
+          "overall_score": 72.15142857142857,
+          "latency_score": 96.1,
+          "uptime_score": 94.28571428571428,
+          "performance_score": 81.85,
+          "reliability_score": 0
+        },
+        {
+          "rank": 7,
+          "peer_name": "load_balanced_1",
+          "overall_score": 72.08041176470589,
+          "latency_score": 96.2,
+          "uptime_score": 94.11764705882352,
+          "performance_score": 81.67,
+          "reliability_score": 0
+        },
+        {
+          "rank": 8,
+          "peer_name": "low_latency_1",
+          "overall_score": 70.0851111111111,
+          "latency_score": 99.4,
+          "uptime_score": 94.44444444444444,
+          "performance_score": 72.08,
+          "reliability_score": 0
+        },
+        {
+          "rank": 9,
+          "peer_name": "low_latency_2",
+          "overall_score": 69.4011111111111,
+          "latency_score": 99.4,
+          "uptime_score": 94.44444444444444,
+          "performance_score": 69.8,
+          "reliability_score": 0
+        },
+        {
+          "rank": 10,
+          "peer_name": "unreliable_1",
+          "overall_score": 55.02542857142857,
+          "latency_score": 88.4,
+          "uptime_score": 94.28571428571428,
+          "performance_score": 31.180000000000003,
+          "reliability_score": 0
+        },
+        {
+          "rank": 11,
+          "peer_name": "unreliable_2",
+          "overall_score": 54.96454838709678,
+          "latency_score": 87,
+          "uptime_score": 96.7741935483871,
+          "performance_score": 30.07,
+          "reliability_score": 0
+        }
+      ],
+      "statistics": {
+        "mean_score": 78.409821774262,
+        "std_dev": 231.22397595101202,
+        "score_range": 21.99988888888889,
+        "discrimination": 2.94891597403058
+      },
+      "performance": {
+        "calculation_time": 43032,
+        "memory_usage": 0,
+        "scalability": "O(n)"
+      }
+    },
+    "Throughput Optimized": {
+      "algorithm": "Throughput Optimized",
+      "rankings": [
+        {
+          "rank": 1,
+          "peer_name": "high_perf_2",
+          "overall_score": 94.89733100000001,
+          "latency_score": 98.9,
+          "uptime_score": 100,
+          "performance_score": 90.92242,
+          "reliability_score": 100
+        },
+        {
+          "rank": 2,
+          "peer_name": "high_perf_1",
+          "overall_score": 94.182739,
+          "latency_score": 99,
+          "uptime_score": 100,
+          "performance_score": 89.60498,
+          "reliability_score": 100
+        },
+        {
+          "rank": 3,
+          "peer_name": "bootstrap",
+          "overall_score": 85.94598400000001,
+          "latency_score": 96.9,
+          "uptime_score": 100,
+          "performance_score": 75.01088,
+          "reliability_score": 100
+        },
+        {
+          "rank": 4,
+          "peer_name": "stable_2",
+          "overall_score": 85.76351600000001,
+          "latency_score": 96.9,
+          "uptime_score": 100,
+          "performance_score": 74.67912,
+          "reliability_score": 100
+        },
+        {
+          "rank": 5,
+          "peer_name": "stable_1",
+          "overall_score": 85.747456,
+          "latency_score": 96.9,
+          "uptime_score": 100,
+          "performance_score": 74.64992,
+          "reliability_score": 100
+        },
+        {
+          "rank": 6,
+          "peer_name": "load_balanced_2",
+          "overall_score": 74.18341785714287,
+          "latency_score": 96.1,
+          "uptime_score": 94.28571428571428,
+          "performance_score": 83.1205,
+          "reliability_score": 0
+        },
+        {
+          "rank": 7,
+          "peer_name": "load_balanced_1",
+          "overall_score": 74.10806041176471,
+          "latency_score": 96.2,
+          "uptime_score": 94.11764705882352,
+          "performance_score": 83.02642,
+          "reliability_score": 0
+        },
+        {
+          "rank": 8,
+          "peer_name": "low_latency_1",
+          "overall_score": 63.669144888888894,
+          "latency_score": 99.4,
+          "uptime_score": 94.44444444444444,
+          "performance_score": 63.34592000000001,
+          "reliability_score": 0
+        },
+        {
+          "rank": 9,
+          "peer_name": "low_latency_2",
+          "overall_score": 62.836488888888894,
+          "latency_score": 99.4,
+          "uptime_score": 94.44444444444444,
+          "performance_score": 61.832,
+          "reliability_score": 0
+        },
+        {
+          "rank": 10,
+          "peer_name": "unreliable_2",
+          "overall_score": 45.70720970967743,
+          "latency_score": 87,
+          "uptime_score": 96.7741935483871,
+          "performance_score": 32.09522,
+          "reliability_score": 0
+        },
+        {
+          "rank": 11,
+          "peer_name": "unreliable_1",
+          "overall_score": 45.42073885714286,
+          "latency_score": 88.4,
+          "uptime_score": 94.28571428571428,
+          "performance_score": 32.22472,
+          "reliability_score": 0
+        }
+      ],
+      "statistics": {
+        "mean_score": 73.86018969213688,
+        "std_dev": 282.8698147186795,
+        "score_range": 11.837923588235299,
+        "discrimination": 3.8298008155372183
+      },
+      "performance": {
+        "calculation_time": 8418,
+        "memory_usage": 0,
+        "scalability": "O(n)"
+      }
+    }
+  },
+  "recommendations": [
+    "Peer Scoring Mechanism Analysis Results:",
+    "",
+    "1. SCORING ALGORITHM COMPARISON:",
+    "   - Best discrimination: Consensus (4.471)",
+    "",
+    "2. ALGORITHM RECOMMENDATIONS:",
+    "   - Use Latency Optimized for real-time applications",
+    "   - Use Throughput Optimized for batch processing",
+    "   - Use Reliability Optimized for critical workloads",
+    "   - Use Load Balanced for resource optimization",
+    "   - Use Standard for general purpose applications",
+    "",
+    "3. IMPLEMENTATION RECOMMENDATIONS:",
+    "   - Implement ping-based latency measurement",
+    "   - Track uptime with historical data",
+    "   - Monitor connection stability patterns",
+    "   - Use exponential weighting for recent measurements",
+    "   - Implement configurable scoring weights",
+    "",
+    "4. NETWORK CONSIDERATIONS:",
+    "   - Monitor for peer churn and adapt scoring accordingly",
+    "   - Consider geographic distribution in scoring",
+    "   - Implement fallback mechanisms for offline peers",
+    "   - Use consensus mechanisms for reputation scoring",
+    "",
+    "5. PERFORMANCE OPTIMIZATIONS:",
+    "   - Cache scoring results with TTL",
+    "   - Use async scoring calculation",
+    "   - Implement peer score prediction",
+    "   - Consider machine learning for adaptive scoring"
+  ]
+}

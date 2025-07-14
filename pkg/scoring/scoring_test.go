@@ -12,9 +12,13 @@ import (
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-
-	"github.com/crowdllama/crowdllama/pkg/crowdllama"
 )
+
+// scoredPeer represents a peer with its score for sorting
+type scoredPeer struct {
+	name  string
+	score *PeerScore
+}
 
 // TestScoringMechanismPoC is the comprehensive test for the scoring mechanism PoC
 func TestScoringMechanismPoC(t *testing.T) {
@@ -226,11 +230,6 @@ func testScoringAlgorithm(ctx context.Context, t *testing.T, network *TestNetwor
 	}
 	
 	// Sort peers by score
-	type scoredPeer struct {
-		name  string
-		score *PeerScore
-	}
-	
 	var sortedPeers []scoredPeer
 	for name, score := range scores {
 		sortedPeers = append(sortedPeers, scoredPeer{name: name, score: score})

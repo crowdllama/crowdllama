@@ -3,14 +3,12 @@ package scoring
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/libp2p/go-libp2p/core/protocol"
 	"go.uber.org/zap"
 
 	"github.com/crowdllama/crowdllama/pkg/crowdllama"
