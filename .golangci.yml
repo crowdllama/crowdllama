@@ -72,7 +72,6 @@ formatters:
   enable:
     - gofmt
     - gofumpt
-    - goimports
   settings:
     goimports:
       local-prefixes:
