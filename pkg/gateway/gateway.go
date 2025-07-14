@@ -195,6 +195,13 @@ func (g *Gateway) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Log API message received
+	g.logger.Debug("Consumer API received inference request",
+		zap.String("model", req.Model),
+		zap.String("prompt", req.Messages[0].Content),
+		zap.Bool("stream", req.Stream),
+		zap.String("worker_id", bestWorker.PeerID))
+
 	// Use PB-based RequestInference
 	pbResp, err := g.RequestInference(ctx, bestWorker.PeerID, req.Model, req.Messages[0].Content, req.Stream)
 	if err != nil {
@@ -249,7 +256,11 @@ func (g *Gateway) RequestInference(ctx context.Context, workerID, model, prompt 
 
 	// Create PB request
 	pbReq := crowdllama.CreateGenerateRequest(model, prompt, stream)
-	g.logger.Debug("Writing PB request to stream", zap.String("model", model), zap.String("prompt", prompt))
+	g.logger.Debug("Consumer sending inference request to network",
+		zap.String("model", model),
+		zap.String("prompt", prompt),
+		zap.String("worker_id", workerID),
+		zap.Bool("stream", stream))
 	if err := g.writePBMessage(streamObj, pbReq); err != nil {
 		return nil, fmt.Errorf("failed to write PB request: %w", err)
 	}
@@ -265,6 +276,10 @@ func (g *Gateway) RequestInference(ctx context.Context, workerID, model, prompt 
 		return nil, fmt.Errorf("failed to extract GenerateResponse: %w", err)
 	}
 
+	g.logger.Debug("Consumer received inference response from network",
+		zap.String("worker_id", workerID),
+		zap.String("model", generateResp.Model),
+		zap.String("response", generateResp.Response))
 	g.logger.Info("Received PB response from worker",
 		zap.String("worker_id", workerID),
 		zap.String("model", generateResp.Model),
