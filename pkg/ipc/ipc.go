@@ -10,11 +10,11 @@ import (
 	"sync"
 
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 
 	llamav1 "github.com/crowdllama/crowdllama-pb/llama/v1"
 	"github.com/crowdllama/crowdllama/pkg/crowdllama"
 	"github.com/crowdllama/crowdllama/pkg/peer"
-	"google.golang.org/protobuf/proto"
 )
 
 // Mode constants for initialization
@@ -210,9 +210,9 @@ func (s *Server) handleConnection(conn net.Conn) {
 		if length > 0 && length < 10*1024*1024 {
 			// Looks like a valid length-prefixed protobuf message
 			msgBytes := make([]byte, length)
-			_, err := conn.Read(msgBytes)
-			if err != nil {
-				s.logger.Error("Failed to read protobuf message from IPC connection", zap.Error(err))
+			_, readErr := conn.Read(msgBytes)
+			if readErr != nil {
+				s.logger.Error("Failed to read protobuf message from IPC connection", zap.Error(readErr))
 				break
 			}
 			s.handleProtobufMessage(msgBytes, conn)

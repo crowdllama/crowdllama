@@ -7,12 +7,15 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	llamav1 "github.com/crowdllama/crowdllama-pb/llama/v1"
 	"github.com/crowdllama/crowdllama/pkg/crowdllama"
 	"github.com/stretchr/testify/assert"
-	"go.uber.org/zap"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// ... existing code ...
 
 func TestIPCServer_PBPrompt(t *testing.T) {
 	t.Log("Starting TestIPCServer_PBPrompt")
@@ -21,8 +24,26 @@ func TestIPCServer_PBPrompt(t *testing.T) {
 	_ = os.Remove(socketPath)
 	t.Logf("Using socket path: %s", socketPath)
 
-	// Mock API handler with logging
-	mockHandler := func(ctx context.Context, req *llamav1.BaseMessage) (*llamav1.BaseMessage, error) {
+	// Create mock handler
+	mockHandler := createMockHandler(t)
+
+	logger := zap.NewNop()
+	server := NewServer(socketPath, logger)
+	server.SetAPIHandler(mockHandler)
+
+	// Start server and get connection
+	conn := startServerAndConnect(t, server, socketPath)
+	defer closeConnection(t, conn)
+
+	// Test the communication
+	testPBCommunication(t, conn)
+
+	t.Log("Test completed successfully")
+}
+
+func createMockHandler(t *testing.T) crowdllama.UnifiedAPIHandler {
+	t.Helper()
+	return func(_ context.Context, req *llamav1.BaseMessage) (*llamav1.BaseMessage, error) {
 		t.Log("Mock API handler called")
 		genReq := req.GetGenerateRequest()
 		if genReq == nil {
@@ -50,11 +71,10 @@ func TestIPCServer_PBPrompt(t *testing.T) {
 		t.Logf("Mock handler returning response: %s", resp.GetResponse())
 		return baseResp, nil
 	}
+}
 
-	logger := zap.NewNop()
-	server := NewServer(socketPath, logger)
-	server.SetAPIHandler(mockHandler)
-
+func startServerAndConnect(t *testing.T, server *Server, socketPath string) net.Conn {
+	t.Helper()
 	t.Log("Starting IPC server")
 	// Start server in background
 	go func() {
@@ -78,26 +98,36 @@ func TestIPCServer_PBPrompt(t *testing.T) {
 	t.Log("Connecting to IPC server...")
 	conn, err := net.Dial("unix", socketPath)
 	assert.NoError(t, err)
-	defer func() {
-		t.Log("Closing client connection")
-		conn.Close()
-	}()
-
 	t.Log("Client connected successfully")
 
+	return conn
+}
+
+func closeConnection(t *testing.T, conn net.Conn) {
+	t.Helper()
+	t.Log("Closing client connection")
+	if closeErr := conn.Close(); closeErr != nil {
+		t.Logf("Error closing connection: %v", closeErr)
+	}
+}
+
+func testPBCommunication(t *testing.T, conn net.Conn) {
+	t.Helper()
 	// Create PB request
 	pbReq := crowdllama.CreateGenerateRequest("llama3.2", "world!", false)
 	t.Logf("Created PB request - Model: %s, Prompt: %s", pbReq.GetGenerateRequest().GetModel(), pbReq.GetGenerateRequest().GetPrompt())
 
 	// Use length-prefixed format
 	t.Log("Writing length-prefixed PB request...")
-	err = crowdllama.WriteLengthPrefixedPB(conn, pbReq)
+	err := crowdllama.WriteLengthPrefixedPB(conn, pbReq)
 	assert.NoError(t, err)
 	t.Log("PB request written successfully")
 
 	// Read PB response with timeout
 	t.Log("Reading PB response...")
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if deadlineErr := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); deadlineErr != nil {
+		t.Logf("Error setting read deadline: %v", deadlineErr)
+	}
 
 	pbResp, err := crowdllama.ReadLengthPrefixedPB(conn)
 	if err != nil {
@@ -113,6 +143,4 @@ func TestIPCServer_PBPrompt(t *testing.T) {
 	assert.Equal(t, "PB Hello, world!", genResp.GetResponse())
 	assert.True(t, genResp.GetDone())
 	assert.Equal(t, "stop", genResp.GetDoneReason())
-
-	t.Log("Test completed successfully")
 }

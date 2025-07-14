@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"io"
 
-	llamav1 "github.com/crowdllama/crowdllama-pb/llama/v1"
 	"google.golang.org/protobuf/proto"
+
+	llamav1 "github.com/crowdllama/crowdllama-pb/llama/v1"
 )
 
 // WriteLengthPrefixedPB writes a protobuf message with a 4-byte length prefix
@@ -17,7 +18,12 @@ func WriteLengthPrefixedPB(w io.Writer, msg *llamav1.BaseMessage) error {
 	}
 
 	// Write 4-byte length prefix (big-endian)
-	length := uint32(len(data))
+	const maxMessageSize = 0xffffffff
+	msgLen := len(data)
+	if msgLen > maxMessageSize {
+		return fmt.Errorf("message too large: %d bytes", msgLen)
+	}
+	length := uint32(msgLen)
 	lengthBytes := make([]byte, 4)
 	binary.BigEndian.PutUint32(lengthBytes, length)
 

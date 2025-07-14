@@ -50,7 +50,7 @@ type Peer struct {
 	APIHandler crowdllama.UnifiedAPIHandler
 
 	// Peer management
-	PeerManager peermanager.PeerManagerI
+	PeerManager peermanager.I
 
 	// Logger
 	logger *zap.Logger
@@ -224,7 +224,8 @@ func (p *Peer) handleInferenceRequest(ctx context.Context, s network.Stream) {
 	}
 
 	// Add logger to context for API handler
-	ctxWithLogger := context.WithValue(ctx, "logger", p.logger)
+	type loggerKey struct{}
+	ctxWithLogger := context.WithValue(ctx, loggerKey{}, p.logger)
 
 	// Process the request using the API handler
 	resp, err := p.APIHandler(ctxWithLogger, req)
@@ -276,34 +277,6 @@ func (p *Peer) writePBMessage(s network.Stream, msg *llamav1.BaseMessage) error 
 	}
 
 	p.logger.Debug("Worker sent PB response", zap.Int("bytes", proto.Size(msg)))
-	return nil
-}
-
-func (p *Peer) readInferenceInput(s network.Stream) (string, error) {
-	if err := s.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		return "", fmt.Errorf("failed to set read deadline: %w", err)
-	}
-
-	buf := make([]byte, 1024)
-	n, err := s.Read(buf)
-	if err != nil {
-		return "", fmt.Errorf("failed to read from stream: %w", err)
-	}
-
-	input := string(buf[:n])
-	p.logger.Debug("Worker received inference request", zap.Int("bytes", n), zap.String("input", input))
-	return input, nil
-}
-
-func (p *Peer) writeInferenceResponse(s network.Stream, output string) error {
-	responseBytes := []byte(output)
-	p.logger.Debug("Worker writing response", zap.Int("bytes", len(responseBytes)), zap.String("output", output))
-
-	_, err := s.Write(responseBytes)
-	if err != nil {
-		return fmt.Errorf("failed to write response: %w", err)
-	}
-
 	return nil
 }
 

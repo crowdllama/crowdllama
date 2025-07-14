@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"testing"
 
-	llamav1 "github.com/crowdllama/crowdllama-pb/llama/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	llamav1 "github.com/crowdllama/crowdllama-pb/llama/v1"
 )
 
 func TestWriteReadLengthPrefixedPB(t *testing.T) {

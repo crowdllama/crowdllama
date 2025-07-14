@@ -17,8 +17,8 @@ import (
 	"github.com/crowdllama/crowdllama/pkg/crowdllama"
 )
 
-// PeerManagerI defines the interface for peer management functionality
-type PeerManagerI interface {
+// I defines the interface for peer management functionality
+type I interface {
 	GetHealthyPeers() map[string]*PeerInfo
 	GetAllPeers() map[string]*PeerInfo
 	GetAvailablePeers() map[string]*crowdllama.Resource

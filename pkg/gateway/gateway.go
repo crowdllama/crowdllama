@@ -9,15 +9,16 @@ import (
 	"os"
 	"time"
 
+	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
+
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
-	"go.uber.org/zap"
 
 	llamav1 "github.com/crowdllama/crowdllama-pb/llama/v1"
 	"github.com/crowdllama/crowdllama/internal/discovery"
 	"github.com/crowdllama/crowdllama/pkg/crowdllama"
 	peerpkg "github.com/crowdllama/crowdllama/pkg/peer"
-	"google.golang.org/protobuf/proto"
 )
 
 // DefaultHTTPPort is the default HTTP port for the gateway
@@ -191,7 +192,9 @@ func (g *Gateway) handleChat(w http.ResponseWriter, r *http.Request) {
 	if bestWorker == nil {
 		g.logger.Error("Failed to find suitable worker")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(map[string]string{"error": "No suitable worker found"})
+		if err := json.NewEncoder(w).Encode(map[string]string{"error": "No suitable worker found"}); err != nil {
+			g.logger.Error("Failed to encode error response", zap.Error(err))
+		}
 		return
 	}
 
@@ -207,7 +210,9 @@ func (g *Gateway) handleChat(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		g.logger.Error("Failed to request inference", zap.Error(err))
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		if encodeErr := json.NewEncoder(w).Encode(map[string]string{"error": err.Error()}); encodeErr != nil {
+			g.logger.Error("Failed to encode error response", zap.Error(encodeErr))
+		}
 		return
 	}
 
@@ -261,8 +266,8 @@ func (g *Gateway) RequestInference(ctx context.Context, workerID, model, prompt 
 		zap.String("prompt", prompt),
 		zap.String("worker_id", workerID),
 		zap.Bool("stream", stream))
-	if err := g.writePBMessage(streamObj, pbReq); err != nil {
-		return nil, fmt.Errorf("failed to write PB request: %w", err)
+	if writeErr := g.writePBMessage(streamObj, pbReq); writeErr != nil {
+		return nil, fmt.Errorf("failed to write PB request: %w", writeErr)
 	}
 
 	g.logger.Debug("Waiting for PB response from worker...")

@@ -9,9 +9,10 @@ import (
 	"net/http"
 	"time"
 
-	llamav1 "github.com/crowdllama/crowdllama-pb/llama/v1"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	llamav1 "github.com/crowdllama/crowdllama-pb/llama/v1"
 )
 
 // UnifiedAPIHandler processes a BaseMessage and returns a BaseMessage response
@@ -96,7 +97,8 @@ func WorkerAPIHandler(ollamaBaseURL string) UnifiedAPIHandler {
 
 // getLoggerFromContext extracts logger from context if available
 func getLoggerFromContext(ctx context.Context) *zap.Logger {
-	if logger, ok := ctx.Value("logger").(*zap.Logger); ok {
+	type loggerKey struct{}
+	if logger, ok := ctx.Value(loggerKey{}).(*zap.Logger); ok {
 		return logger
 	}
 	return nil
@@ -135,7 +137,14 @@ func callOllamaAPI(ctx context.Context, req *llamav1.GenerateRequest, baseURL st
 	if err != nil {
 		return nil, fmt.Errorf("failed to make HTTP request to Ollama: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			// Log the error but don't fail the request
+			if logger := getLoggerFromContext(ctx); logger != nil {
+				logger.Warn("Failed to close response body", zap.Error(closeErr))
+			}
+		}
+	}()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -151,7 +160,7 @@ func callOllamaAPI(ctx context.Context, req *llamav1.GenerateRequest, baseURL st
 }
 
 // DefaultAPIHandler provides a basic implementation that processes GenerateRequest
-func DefaultAPIHandler(ctx context.Context, req *llamav1.BaseMessage) (*llamav1.BaseMessage, error) {
+func DefaultAPIHandler(_ context.Context, req *llamav1.BaseMessage) (*llamav1.BaseMessage, error) {
 	// Check if this is a GenerateRequest
 	generateReq := req.GetGenerateRequest()
 	if generateReq == nil {
