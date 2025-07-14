@@ -101,8 +101,8 @@ type PeerInfo struct {
 // NewManager creates a new peer manager
 func NewManager(
 	ctx context.Context,
-	host host.Host,
-	dht *dht.IpfsDHT,
+	hostInstance host.Host,
+	dhtInstance *dht.IpfsDHT,
 	logger *zap.Logger,
 	config *Config,
 ) *Manager {
@@ -116,8 +116,8 @@ func NewManager(
 	metadataCtx, metadataCancel := context.WithCancel(ctx)
 
 	return &Manager{
-		host:              host,
-		dht:               dht,
+		host:              hostInstance,
+		dht:               dhtInstance,
 		logger:            logger,
 		ctx:               ctx,
 		cancel:            nil, // Will be set by Start()

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -136,27 +135,6 @@ func (m *MockOllamaServer) GetPort() int {
 	return m.port
 }
 
-// getRandomPort returns a random available port
-func getRandomPort() (int, error) {
-	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
-	if err != nil {
-		return 0, fmt.Errorf("failed to resolve TCP address: %w", err)
-	}
-
-	l, err := net.ListenTCP("tcp", addr)
-	if err != nil {
-		return 0, fmt.Errorf("failed to listen on TCP address: %w", err)
-	}
-	defer func() {
-		if closeErr := l.Close(); closeErr != nil {
-			// Log the error but don't fail the test for this
-			fmt.Printf("Warning: failed to close listener: %v\n", closeErr)
-		}
-	}()
-
-	return l.Addr().(*net.TCPAddr).Port, nil
-}
-
 // TestFullIntegration tests the complete end-to-end flow
 func TestFullIntegration(t *testing.T) {
 	if testing.Short() {
@@ -202,8 +180,8 @@ func TestFullIntegration(t *testing.T) {
 	defer consumerPeer.StopMetadataUpdates()
 
 	consumerPort := 9003
-	gateway := stepStartConsumerGateway(ctx, t, consumerPeer, consumerPort, logger)
-	defer stepShutdownConsumerGateway(t, gateway)
+	gatewayInstance := stepStartConsumerGateway(ctx, t, consumerPeer, consumerPort, logger)
+	defer stepShutdownConsumerGateway(t, gatewayInstance)
 
 	stepWaitForDiscovery(t, dhtServer, workerPeer, consumerPeer)
 
@@ -426,14 +404,14 @@ func stepStartConsumerGateway(
 	return g
 }
 
-func stepShutdownConsumerGateway(t *testing.T, gateway *gateway.Gateway) {
+func stepShutdownConsumerGateway(t *testing.T, gatewayInstance *gateway.Gateway) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	gateway.StopBackgroundDiscovery()
-	if err := gateway.StopHTTPServer(ctx); err != nil {
+	gatewayInstance.StopBackgroundDiscovery()
+	if err := gatewayInstance.StopHTTPServer(ctx); err != nil {
 		t.Logf("Failed to stop HTTP server: %v", err)
 	}
 
@@ -457,7 +435,7 @@ func stepWaitForDiscovery(
 	t.Logf("Discovery complete - worker and consumer found each other")
 }
 
-func stepWaitForWorkerDiscoveryByConsumer(t *testing.T, consumerPeer *peer.Peer, workerPeer *peer.Peer) {
+func stepWaitForWorkerDiscoveryByConsumer(t *testing.T, consumerPeer, workerPeer *peer.Peer) {
 	t.Helper()
 
 	workerPeerID := workerPeer.Host.ID().String()
@@ -530,11 +508,16 @@ func stepSendAndValidateRequest(_ context.Context, t *testing.T, consumerPort in
 	}
 
 	// Send request to the consumer gateway
-	resp, err := http.Post(
+	req, err := http.NewRequestWithContext(context.Background(), "POST",
 		fmt.Sprintf("http://localhost:%d/api/chat", consumerPort),
-		"application/json",
-		bytes.NewBuffer(requestJSON),
-	)
+		bytes.NewBuffer(requestJSON))
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("Failed to send request: %v", err)
 	}
@@ -649,11 +632,16 @@ func testMockOllamaRequest(t *testing.T, mockOllama *MockOllamaServer) {
 		t.Fatalf("Failed to marshal request: %v", err)
 	}
 
-	resp, err := http.Post(
+	req, err := http.NewRequestWithContext(context.Background(), "POST",
 		fmt.Sprintf("http://localhost:%d/api/chat", mockOllama.GetPort()),
-		"application/json",
-		bytes.NewBuffer(requestJSON),
-	)
+		bytes.NewBuffer(requestJSON))
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("Failed to send request: %v", err)
 	}

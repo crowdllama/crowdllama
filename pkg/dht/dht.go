@@ -382,15 +382,6 @@ func (s *Server) handlePeerDisconnected(_ network.Network, conn network.Conn) {
 		zap.String("peer_id", peerID))
 }
 
-// multiaddrsToStrings converts multiaddrs to string slice for logging
-func (s *Server) multiaddrsToStrings(addrs []multiaddr.Multiaddr) []string {
-	result := make([]string, len(addrs))
-	for i, addr := range addrs {
-		result[i] = addr.String()
-	}
-	return result
-}
-
 // isRelayConnection checks if a connection is going through a relay
 func isRelayConnection(addr string) bool {
 	return strings.Contains(addr, "/p2p-circuit/")

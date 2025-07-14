@@ -3,6 +3,7 @@ package ipc
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,8 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crowdllama/crowdllama/pkg/peer"
 	"go.uber.org/zap"
+
+	"github.com/crowdllama/crowdllama/pkg/peer"
 )
 
 // Mode constants for initialization
@@ -456,7 +458,7 @@ func (s *Server) sendHTTPRequest(url string, requestBody map[string]interface{})
 		return "", fmt.Errorf("failed to marshal request body: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(context.Background(), "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return "", fmt.Errorf("failed to create HTTP request: %w", err)
 	}
@@ -488,13 +490,6 @@ func (s *Server) sendHTTPRequest(url string, requestBody map[string]interface{})
 	}
 
 	return string(body), nil
-}
-
-// sendPromptToConsumer sends a prompt to the consumer (placeholder)
-func (s *Server) sendPromptToConsumer(_, _ string) (string, error) {
-	// This would send the prompt to the consumer's HTTP server
-	// For now, return a placeholder response
-	return "Consumer prompt handling not yet implemented", nil
 }
 
 // sendPromptToOllama sends a prompt to Ollama

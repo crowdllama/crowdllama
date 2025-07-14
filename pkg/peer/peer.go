@@ -18,12 +18,13 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/multiformats/go-multihash"
 
+	"go.uber.org/zap"
+
 	"github.com/crowdllama/crowdllama/internal/discovery"
 	"github.com/crowdllama/crowdllama/pkg/config"
 	"github.com/crowdllama/crowdllama/pkg/crowdllama"
 	"github.com/crowdllama/crowdllama/pkg/peermanager"
 	"github.com/crowdllama/crowdllama/pkg/version"
-	"go.uber.org/zap"
 )
 
 // InferenceProtocol is the protocol identifier for inference requests
@@ -104,19 +105,40 @@ func NewPeerWithConfig(
 		return nil, fmt.Errorf("new host and DHT: %w", err)
 	}
 
-	// Bootstrap with custom peers if provided, otherwise use defaults
-	if len(cfg.BootstrapPeers) > 0 {
-		if err := discovery.BootstrapDHTWithPeers(ctx, h, kadDHT, cfg.BootstrapPeers, logger); err != nil {
-			return nil, fmt.Errorf("bootstrap DHT with custom peers: %w", err)
-		}
-	} else {
-		if err := discovery.BootstrapDHT(ctx, h, kadDHT, logger); err != nil {
-			return nil, fmt.Errorf("bootstrap DHT: %w", err)
-		}
+	if err := bootstrapDHT(ctx, h, kadDHT, cfg, logger); err != nil {
+		return nil, err
 	}
 
 	logger.Debug("BootstrapDHT completed successfully")
 
+	peer := createPeerInstance(ctx, h, kadDHT, cfg, workerMode, logger)
+	setupStreamHandler(ctx, peer)
+
+	return peer, nil
+}
+
+func bootstrapDHT(ctx context.Context, h host.Host, kadDHT *dht.IpfsDHT, cfg *config.Configuration, logger *zap.Logger) error {
+	// Bootstrap with custom peers if provided, otherwise use defaults
+	if len(cfg.BootstrapPeers) > 0 {
+		if err := discovery.BootstrapDHTWithPeers(ctx, h, kadDHT, cfg.BootstrapPeers, logger); err != nil {
+			return fmt.Errorf("bootstrap DHT with custom peers: %w", err)
+		}
+	} else {
+		if err := discovery.BootstrapDHT(ctx, h, kadDHT, logger); err != nil {
+			return fmt.Errorf("bootstrap DHT: %w", err)
+		}
+	}
+	return nil
+}
+
+func createPeerInstance(
+	ctx context.Context,
+	h host.Host,
+	kadDHT *dht.IpfsDHT,
+	cfg *config.Configuration,
+	workerMode bool,
+	logger *zap.Logger,
+) *Peer {
 	// Initialize metadata
 	metadata := crowdllama.NewCrowdLlamaResource(h.ID().String())
 	metadata.WorkerMode = workerMode
@@ -128,22 +150,7 @@ func NewPeerWithConfig(
 	advertisingCtx, advertisingCancel := context.WithCancel(ctx)
 
 	// Initialize peer manager
-	peerManagerConfig := peermanager.DefaultConfig()
-	if os.Getenv("CROWDLLAMA_TEST_MODE") == "1" {
-		peerManagerConfig = &peermanager.Config{
-			DiscoveryInterval:      2 * time.Second,
-			AdvertisingInterval:    5 * time.Second,
-			MetadataUpdateInterval: 5 * time.Second,
-			PeerHealthConfig: &peermanager.PeerHealthConfig{
-				StalePeerTimeout:    30 * time.Second, // Shorter for testing
-				HealthCheckInterval: 5 * time.Second,
-				MaxFailedAttempts:   2,
-				BackoffBase:         5 * time.Second,
-				MetadataTimeout:     2 * time.Second,
-				MaxMetadataAge:      30 * time.Second,
-			},
-		}
-	}
+	peerManagerConfig := getPeerManagerConfig()
 
 	peer := &Peer{
 		Host:              h,
@@ -160,12 +167,34 @@ func NewPeerWithConfig(
 		logger:            logger,
 	}
 
+	return peer
+}
+
+func getPeerManagerConfig() *peermanager.Config {
+	peerManagerConfig := peermanager.DefaultConfig()
+	if os.Getenv("CROWDLLAMA_TEST_MODE") == "1" {
+		peerManagerConfig = &peermanager.Config{
+			DiscoveryInterval:      2 * time.Second,
+			AdvertisingInterval:    5 * time.Second,
+			MetadataUpdateInterval: 5 * time.Second,
+			PeerHealthConfig: &peermanager.PeerHealthConfig{
+				StalePeerTimeout:    30 * time.Second, // Shorter for testing
+				HealthCheckInterval: 5 * time.Second,
+				MaxFailedAttempts:   2,
+				BackoffBase:         5 * time.Second,
+				MetadataTimeout:     2 * time.Second,
+				MaxMetadataAge:      30 * time.Second,
+			},
+		}
+	}
+	return peerManagerConfig
+}
+
+func setupStreamHandler(ctx context.Context, peer *Peer) {
 	// Set up stream handler with the peer instance
-	h.SetStreamHandler(InferenceProtocol, func(s network.Stream) {
+	peer.Host.SetStreamHandler(InferenceProtocol, func(s network.Stream) {
 		peer.handleInferenceRequest(ctx, s)
 	})
-
-	return peer, nil
 }
 
 // NewPeer creates a new peer instance

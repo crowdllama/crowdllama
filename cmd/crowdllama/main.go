@@ -39,10 +39,7 @@ var (
 
 func main() {
 	// Setup logging first
-	if err := setupLogging(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to setup logging: %v\n", err)
-		os.Exit(1)
-	}
+	setupLogging()
 	defer func() {
 		if syncErr := logger.Sync(); syncErr != nil {
 			fmt.Fprintf(os.Stderr, "failed to sync logger: %v\n", syncErr)
@@ -111,7 +108,7 @@ var startCmd = &cobra.Command{
 	},
 }
 
-func setupLogging() error {
+func setupLogging() {
 	// Initialize configuration
 	cfg = config.NewConfiguration()
 
@@ -144,8 +141,6 @@ func setupLogging() error {
 	} else {
 		logger.Info("No IPC socket configured, skipping IPC server")
 	}
-
-	return nil
 }
 
 func runVersion() {
@@ -219,6 +214,14 @@ func runWorkerMode() {
 		return
 	}
 
+	setupWorkerPeer(ctx, p)
+	startWorkerServices(ctx, p)
+	startPeerStatsLogging(ctx, p, logger)
+	startPeerDiscovery(ctx, p, logger)
+	waitForShutdownSignal(p, logger)
+}
+
+func setupWorkerPeer(ctx context.Context, p *peer.Peer) {
 	// Start the peer manager
 	p.PeerManager.Start()
 
@@ -234,7 +237,9 @@ func runWorkerMode() {
 	p.SetupMetadataHandler()
 	p.StartMetadataUpdates()
 	p.AdvertisePeer(ctx, crowdllama.PeerNamespace)
+}
 
+func startWorkerServices(ctx context.Context, p *peer.Peer) {
 	// Start metadata publisher
 	go func() {
 		ticker := time.NewTicker(5 * time.Second)
@@ -268,14 +273,6 @@ func runWorkerMode() {
 			}
 		}()
 	}
-
-	// Start peer statistics logging
-	startPeerStatsLogging(ctx, p, logger)
-
-	// Start peer discovery
-	startPeerDiscovery(ctx, p, logger)
-
-	waitForShutdownSignal(p, logger)
 }
 
 func runConsumerMode() {
@@ -295,6 +292,22 @@ func runConsumerMode() {
 		return
 	}
 
+	g := setupConsumerPeer(ctx, p)
+	startConsumerServices(ctx, p, g)
+	startPeerStatsLogging(ctx, p, logger)
+	startPeerDiscovery(ctx, p, logger)
+
+	// Wait for shutdown signal
+	waitForShutdownSignal(p, logger)
+
+	// Stop background discovery and HTTP server
+	g.StopBackgroundDiscovery()
+	if err := g.StopHTTPServer(ctx); err != nil {
+		logger.Error("Failed to stop HTTP server", zap.Error(err))
+	}
+}
+
+func setupConsumerPeer(ctx context.Context, p *peer.Peer) *gateway.Gateway {
 	// Start the peer manager
 	p.PeerManager.Start()
 
@@ -302,7 +315,7 @@ func runConsumerMode() {
 	g, err := gateway.NewGateway(ctx, logger, p)
 	if err != nil {
 		logger.Error("Failed to start gateway", zap.Error(err))
-		return
+		return nil
 	}
 
 	logger.Info("Peer initialized in consumer mode", zap.String("peer_id", p.Host.ID().String()))
@@ -313,6 +326,10 @@ func runConsumerMode() {
 	p.StartMetadataUpdates()
 	p.AdvertisePeer(ctx, crowdllama.PeerNamespace)
 
+	return g
+}
+
+func startConsumerServices(ctx context.Context, p *peer.Peer, g *gateway.Gateway) {
 	// Start metadata publisher
 	go func() {
 		ticker := time.NewTicker(5 * time.Second)
@@ -337,21 +354,6 @@ func runConsumerMode() {
 			logger.Error("Failed to start HTTP server", zap.Error(err))
 		}
 	}()
-
-	// Start peer statistics logging
-	startPeerStatsLogging(ctx, p, logger)
-
-	// Start peer discovery
-	startPeerDiscovery(ctx, p, logger)
-
-	// Wait for shutdown signal
-	waitForShutdownSignal(p, logger)
-
-	// Stop background discovery and HTTP server
-	g.StopBackgroundDiscovery()
-	if err := g.StopHTTPServer(ctx); err != nil {
-		logger.Error("Failed to stop HTTP server", zap.Error(err))
-	}
 }
 
 // startPeerStatsLogging starts periodic logging of peer statistics
