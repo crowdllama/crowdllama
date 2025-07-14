@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -54,6 +53,9 @@ func main() {
 	ollamaCmd.Root().SilenceUsage = true
 	ollamaCmd.Root().SilenceErrors = true
 
+	// Add global verbose flag
+	ollamaCmd.PersistentFlags().BoolVar(&cfg.Verbose, "verbose", false, "Enable verbose (debug) logging")
+
 	// Add our custom commands
 	ollamaCmd.AddCommand(networkStatusCmd)
 	ollamaCmd.AddCommand(versionCmd)
@@ -62,6 +64,8 @@ func main() {
 	// Add flags to start command
 	startCmd.Flags().BoolVar(&workerMode, "worker-mode", false, "Run in worker mode (default: consumer mode)")
 	startCmd.Flags().IntVar(&port, "port", 9001, "HTTP server port (consumer mode only)")
+	startCmd.Flags().StringVar(&cfg.KeyPath, "key", "", "Path to private key file (default: ~/.crowdllama/<component>.key)")
+	startCmd.Flags().StringVar(&cfg.OllamaBaseURL, "ollama-url", "http://localhost:11434", "Base URL for Ollama API endpoint")
 
 	// Hack: Rename existing start command to start_ollama and store reference
 	for _, command := range ollamaCmd.Commands() {
@@ -112,11 +116,7 @@ func setupLogging() {
 	// Initialize configuration
 	cfg = config.NewConfiguration()
 
-	// Parse command line flags
-	flagSet := flag.NewFlagSet("crowdllama", flag.ExitOnError)
-	cfg.ParseFlags(flagSet)
-
-	// Load from environment variables
+	// Load from environment variables first
 	cfg.LoadFromEnvironment()
 
 	// Setup logger using unified logging
@@ -162,6 +162,24 @@ func runStart(cobraCmd *cobra.Command, _ []string) {
 	// Get flags from Cobra command
 	workerMode, _ = cobraCmd.Flags().GetBool("worker-mode")
 	port, _ = cobraCmd.Flags().GetInt("port")
+
+	// Update flags from Cobra command
+	if verbose, _ := cobraCmd.Flags().GetBool("verbose"); verbose {
+		cfg.Verbose = true
+		// Recreate logger with verbose mode
+		logger = logutil.NewAppLogger("crowdllama", true)
+		logger.Info("Verbose mode enabled via command line flag")
+	}
+
+	if keyPath, _ := cobraCmd.Flags().GetString("key"); keyPath != "" {
+		cfg.KeyPath = keyPath
+		logger.Info("Using custom key path", zap.String("key_path", keyPath))
+	}
+
+	if ollamaURL, _ := cobraCmd.Flags().GetString("ollama-url"); ollamaURL != "" {
+		cfg.OllamaBaseURL = ollamaURL
+		logger.Info("Using custom Ollama URL", zap.String("ollama_url", ollamaURL))
+	}
 
 	if workerMode {
 		logger.Info("Starting in WORKER mode")
