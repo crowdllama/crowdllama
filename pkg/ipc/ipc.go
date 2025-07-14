@@ -2,20 +2,19 @@
 package ipc
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
 	"os"
 	"sync"
-	"time"
 
 	"go.uber.org/zap"
 
+	llamav1 "github.com/crowdllama/crowdllama-pb/llama/v1"
+	"github.com/crowdllama/crowdllama/pkg/crowdllama"
 	"github.com/crowdllama/crowdllama/pkg/peer"
+	"google.golang.org/protobuf/proto"
 )
 
 // Mode constants for initialization
@@ -53,24 +52,6 @@ type InitializeStatusMessage struct {
 	Text string `json:"text"`
 }
 
-// PromptMessage represents a prompt request
-// Updated to match the expected IPC message format
-// {"type":"prompt","prompt":"is the sky blue?","model":"gpt-4"}
-type PromptMessage struct {
-	Type   string `json:"type"`
-	Prompt string `json:"prompt"`
-	Model  string `json:"model"`
-	ID     string `json:"id,omitempty"`
-}
-
-// PromptResponseMessage represents a prompt response
-type PromptResponseMessage struct {
-	Type    string `json:"type"`
-	Content string `json:"content"`
-	ID      string `json:"id,omitempty"`
-	Error   string `json:"error,omitempty"`
-}
-
 // PingMessage represents a ping message
 type PingMessage struct {
 	BaseMessage
@@ -101,6 +82,7 @@ type Server struct {
 	// Application state
 	peerInstance interface{} // *peer.Peer
 	currentMode  string
+	apiHandler   crowdllama.UnifiedAPIHandler
 }
 
 // NewServer creates a new IPC server
@@ -108,6 +90,7 @@ func NewServer(socketPath string, logger *zap.Logger) *Server {
 	return &Server{
 		socketPath: socketPath,
 		logger:     logger,
+		apiHandler: crowdllama.DefaultAPIHandler,
 	}
 }
 
@@ -145,6 +128,11 @@ func (s *Server) SetPeerInstance(peerInstance interface{}) {
 			s.currentMode = ModeConsumer
 		}
 	}
+}
+
+// SetAPIHandler sets the unified API handler for processing inference requests
+func (s *Server) SetAPIHandler(handler crowdllama.UnifiedAPIHandler) {
+	s.apiHandler = handler
 }
 
 // GetCurrentMode returns the current mode
@@ -262,30 +250,23 @@ func (s *Server) handleMessage(message []byte, conn net.Conn) {
 func (s *Server) handlePingMessage(message []byte, conn net.Conn) {
 	var pingMsg PingMessage
 	if err := json.Unmarshal(message, &pingMsg); err != nil {
-		s.logger.Warn("Failed to parse ping message", zap.Error(err))
-		pongMsg := &PongMessage{
-			BaseMessage: BaseMessage{
-				Type: MessageTypePong,
-			},
-			Payload: "Failed to parse ping message",
-		}
-		if err := s.sendToIPC(conn, pongMsg, "pong"); err != nil {
-			s.logger.Error("Failed to send pong message", zap.Error(err))
-		}
+		s.logger.Error("Failed to parse ping message", zap.Error(err))
 		return
 	}
 
-	// Create pong response
-	pongMsg := &PongMessage{
+	s.logger.Info("Received ping message", zap.Int64("timestamp", pingMsg.Timestamp))
+
+	// Send pong response
+	pongMsg := PongMessage{
 		BaseMessage: BaseMessage{
 			Type: MessageTypePong,
 			ID:   pingMsg.ID,
 		},
-		Payload: fmt.Sprintf("pong at %d", time.Now().Unix()),
+		Payload: "pong",
 	}
 
-	if err := s.sendToIPC(conn, pongMsg, "pong"); err != nil {
-		s.logger.Error("Failed to send pong message", zap.Error(err))
+	if err := s.sendToIPC(conn, pongMsg, MessageTypePong); err != nil {
+		s.logger.Error("Failed to send pong response", zap.Error(err))
 	}
 }
 
@@ -294,14 +275,14 @@ func (s *Server) sendToIPC(conn net.Conn, message interface{}, messageType strin
 	s.writeMutex.Lock()
 	defer s.writeMutex.Unlock()
 
-	jsonData, err := json.Marshal(message)
+	data, err := json.Marshal(message)
 	if err != nil {
-		return fmt.Errorf("failed to marshal %s message: %w", messageType, err)
+		return fmt.Errorf("failed to marshal IPC message: %w", err)
 	}
 
-	_, err = conn.Write(jsonData)
+	_, err = conn.Write(data)
 	if err != nil {
-		return fmt.Errorf("failed to write %s message: %w", messageType, err)
+		return fmt.Errorf("failed to write to IPC connection: %w", err)
 	}
 
 	s.logger.Info("Sent IPC message", zap.String("type", messageType))
@@ -310,228 +291,123 @@ func (s *Server) sendToIPC(conn net.Conn, message interface{}, messageType strin
 
 // sendInitializeResponse sends an initialization response
 func (s *Server) sendInitializeResponse(conn net.Conn, mode string) {
-	response := &ResponseMessage{
-		BaseMessage: BaseMessage{
-			Type: MessageTypeResponse,
-		},
-		Payload: map[string]string{
-			"mode": mode,
-		},
-		Success: true,
+	response := InitializeStatusMessage{
+		Type: MessageTypeInitializeStatus,
+		Text: fmt.Sprintf("Initialized in %s mode", mode),
 	}
 
-	if err := s.sendToIPC(conn, response, "initialize_response"); err != nil {
+	if err := s.sendToIPC(conn, response, MessageTypeInitializeStatus); err != nil {
 		s.logger.Error("Failed to send initialize response", zap.Error(err))
 	}
 }
 
 // sendErrorResponse sends an error response
 func (s *Server) sendErrorResponse(conn net.Conn, errorMsg string) {
-	response := &ResponseMessage{
+	response := ResponseMessage{
 		BaseMessage: BaseMessage{
 			Type: MessageTypeResponse,
-		},
-		Payload: map[string]string{
-			"error": errorMsg,
 		},
 		Success: false,
 		Error:   errorMsg,
 	}
 
-	if err := s.sendToIPC(conn, response, "error_response"); err != nil {
+	if err := s.sendToIPC(conn, response, MessageTypeResponse); err != nil {
 		s.logger.Error("Failed to send error response", zap.Error(err))
 	}
 }
 
-// emitInitializeStatus emits initialization status updates
+// emitInitializeStatus emits initialization status
 func (s *Server) emitInitializeStatus(conn net.Conn, text string) {
-	statusMsg := &InitializeStatusMessage{
+	status := InitializeStatusMessage{
 		Type: MessageTypeInitializeStatus,
 		Text: text,
 	}
 
-	if err := s.sendToIPC(conn, statusMsg, "initialize_status"); err != nil {
+	if err := s.sendToIPC(conn, status, MessageTypeInitializeStatus); err != nil {
 		s.logger.Error("Failed to emit initialize status", zap.Error(err))
 	}
 }
 
 // handleWorkerInitialization handles worker mode initialization
 func (s *Server) handleWorkerInitialization(conn net.Conn) {
+	s.emitInitializeStatus(conn, "Starting worker mode...")
 	s.emitInitializeStatus(conn, "Worker mode initialized")
-	s.sendInitializeResponse(conn, ModeWorker)
 }
 
 // handleConsumerInitialization handles consumer mode initialization
 func (s *Server) handleConsumerInitialization(conn net.Conn) {
+	s.emitInitializeStatus(conn, "Starting consumer mode...")
 	s.emitInitializeStatus(conn, "Consumer mode initialized")
-	s.sendInitializeResponse(conn, ModeConsumer)
 }
 
 // handleInitializeMessage handles initialization messages
 func (s *Server) handleInitializeMessage(message []byte, conn net.Conn) {
 	var initMsg InitializeMessage
 	if err := json.Unmarshal(message, &initMsg); err != nil {
-		s.logger.Warn("Failed to parse initialize message", zap.Error(err))
-		s.sendErrorResponse(conn, "Failed to parse initialize message")
+		s.logger.Error("Failed to parse initialize message", zap.Error(err))
+		s.sendErrorResponse(conn, "Invalid initialize message format")
 		return
 	}
 
 	s.logger.Info("Received initialize message", zap.String("mode", initMsg.Mode))
 
-	// Check if we have a peer instance
-	if s.peerInstance == nil {
-		s.logger.Error("No peer instance available for initialization")
-		s.sendErrorResponse(conn, "No peer instance available")
+	switch initMsg.Mode {
+	case ModeWorker:
+		s.currentMode = ModeWorker
+		s.handleWorkerInitialization(conn)
+	case ModeConsumer:
+		s.currentMode = ModeConsumer
+		s.handleConsumerInitialization(conn)
+	default:
+		s.logger.Error("Unknown initialization mode", zap.String("mode", initMsg.Mode))
+		s.sendErrorResponse(conn, "Unknown initialization mode")
 		return
 	}
 
-	// Determine mode based on peer instance
-	if p, ok := s.peerInstance.(*peer.Peer); ok {
-		if p.WorkerMode {
-			s.handleWorkerInitialization(conn)
-		} else {
-			s.handleConsumerInitialization(conn)
-		}
-	} else {
-		s.logger.Error("Invalid peer instance type")
-		s.sendErrorResponse(conn, "Invalid peer instance type")
-	}
+	s.sendInitializeResponse(conn, s.currentMode)
 }
 
-// handlePromptMessage handles prompt messages
+// handlePromptMessage handles prompt messages using PB-based inference
 func (s *Server) handlePromptMessage(message []byte, conn net.Conn) {
-	var promptMsg PromptMessage
-	if err := json.Unmarshal(message, &promptMsg); err != nil {
-		s.logger.Warn("Failed to parse prompt message", zap.Error(err))
-		s.sendErrorResponse(conn, "Failed to parse prompt message")
+	var pbReq llamav1.BaseMessage
+	if err := proto.Unmarshal(message, &pbReq); err != nil {
+		s.logger.Error("Failed to unmarshal PB prompt message", zap.Error(err))
+		s.sendErrorResponse(conn, "Invalid PB prompt message format")
 		return
 	}
 
-	s.logger.Info("Received prompt message",
-		zap.String("prompt", promptMsg.Prompt),
-		zap.String("model", promptMsg.Model),
-		zap.String("id", promptMsg.ID))
-
-	// Check if we have a peer instance
-	if s.peerInstance == nil {
-		s.logger.Error("No peer instance available for prompt handling")
-		s.sendErrorResponse(conn, "No peer instance available")
+	generateReq := pbReq.GetGenerateRequest()
+	if generateReq == nil {
+		s.logger.Error("No GenerateRequest in PB message")
+		s.sendErrorResponse(conn, "No GenerateRequest in PB message")
 		return
 	}
 
-	// Handle prompt based on peer mode
-	if p, ok := s.peerInstance.(*peer.Peer); ok {
-		if p.WorkerMode {
-			// Worker mode: handle locally with Ollama
-			response, err := s.sendPromptToOllama(promptMsg.Prompt, promptMsg.Model)
-			if err != nil {
-				s.logger.Error("Failed to send prompt to Ollama", zap.Error(err))
-				s.sendErrorResponse(conn, fmt.Sprintf("Failed to send prompt to Ollama: %v", err))
-				return
-			}
+	s.logger.Info("Received PB prompt message",
+		zap.String("model", generateReq.GetModel()),
+		zap.String("prompt", generateReq.GetPrompt()))
 
-			// Send response
-			promptResponse := &PromptResponseMessage{
-				Type:    MessageTypePromptResponse,
-				Content: response,
-				ID:      promptMsg.ID,
-			}
-
-			if err := s.sendToIPC(conn, promptResponse, "prompt_response"); err != nil {
-				s.logger.Error("Failed to send prompt response", zap.Error(err))
-			}
-		} else {
-			// Consumer mode: send to network (placeholder for now)
-			s.logger.Info("Consumer mode prompt handling not yet implemented")
-			s.sendErrorResponse(conn, "Consumer mode prompt handling not yet implemented")
-		}
-	} else {
-		s.logger.Error("Invalid peer instance type")
-		s.sendErrorResponse(conn, "Invalid peer instance type")
-	}
-}
-
-// sendHTTPRequest sends an HTTP request and returns the response
-func (s *Server) sendHTTPRequest(url string, requestBody map[string]interface{}) (string, error) {
-	jsonData, err := json.Marshal(requestBody)
+	ctx := context.Background()
+	pbResp, err := s.apiHandler(ctx, &pbReq)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal request body: %w", err)
+		s.logger.Error("Failed to process prompt", zap.Error(err))
+		s.sendErrorResponse(conn, fmt.Sprintf("Failed to process prompt: %v", err))
+		return
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), "POST", url, bytes.NewBuffer(jsonData))
+	respBytes, err := proto.Marshal(pbResp)
 	if err != nil {
-		return "", fmt.Errorf("failed to create HTTP request: %w", err)
+		s.logger.Error("Failed to marshal PB response", zap.Error(err))
+		s.sendErrorResponse(conn, "Failed to marshal PB response")
+		return
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
-
-	resp, err := client.Do(req)
+	s.writeMutex.Lock()
+	defer s.writeMutex.Unlock()
+	_, err = conn.Write(respBytes)
 	if err != nil {
-		return "", fmt.Errorf("failed to send HTTP request: %w", err)
+		s.logger.Error("Failed to write PB response to IPC connection", zap.Error(err))
 	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			// Log error but don't fail the operation
-			fmt.Printf("Warning: failed to close response body: %v\n", closeErr)
-		}
-	}()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("HTTP request failed with status %d: %s", resp.StatusCode, string(body))
-	}
-
-	return string(body), nil
-}
-
-// sendPromptToOllama sends a prompt to Ollama
-func (s *Server) sendPromptToOllama(prompt, model string) (string, error) {
-	// Use the model from the request, or default to "tinyllama"
-	if model == "" {
-		model = "tinyllama"
-	}
-
-	requestBody := map[string]interface{}{
-		"model": model,
-		"messages": []map[string]string{
-			{
-				"role":    "user",
-				"content": prompt,
-			},
-		},
-		"stream": false,
-	}
-
-	// Use localhost Ollama server
-	url := "http://localhost:11434/api/chat"
-
-	response, err := s.sendHTTPRequest(url, requestBody)
-	if err != nil {
-		return "", fmt.Errorf("failed to send prompt to Ollama: %w", err)
-	}
-
-	// Parse the response to extract the content
-	var ollamaResp map[string]interface{}
-	if err := json.Unmarshal([]byte(response), &ollamaResp); err != nil {
-		return "", fmt.Errorf("failed to parse Ollama response: %w", err)
-	}
-
-	// Extract the message content
-	if message, ok := ollamaResp["message"].(map[string]interface{}); ok {
-		if content, ok := message["content"].(string); ok {
-			return content, nil
-		}
-	}
-
-	return "No response content received from Ollama", nil
 }
 
 // handleUnknownMessage handles unknown message types

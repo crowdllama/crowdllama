@@ -2,12 +2,8 @@
 package peer
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"time"
 
@@ -17,18 +13,17 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/multiformats/go-multihash"
+	"google.golang.org/protobuf/proto"
 
 	"go.uber.org/zap"
 
+	llamav1 "github.com/crowdllama/crowdllama-pb/llama/v1"
 	"github.com/crowdllama/crowdllama/internal/discovery"
 	"github.com/crowdllama/crowdllama/pkg/config"
 	"github.com/crowdllama/crowdllama/pkg/crowdllama"
 	"github.com/crowdllama/crowdllama/pkg/peermanager"
 	"github.com/crowdllama/crowdllama/pkg/version"
 )
-
-// InferenceProtocol is the protocol identifier for inference requests
-const InferenceProtocol = "/crowdllama/inference/1.0.0"
 
 // MetadataUpdateInterval is the interval at which peer metadata is updated
 var MetadataUpdateInterval = 30 * time.Second
@@ -43,29 +38,6 @@ func GetMetadataUpdateInterval() time.Duration {
 	return MetadataUpdateInterval
 }
 
-// OllamaRequest represents the request structure for Ollama API
-type OllamaRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Stream   bool      `json:"stream"`
-}
-
-// Message represents a message in the Ollama API
-type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-// OllamaResponse represents the response structure from Ollama API
-type OllamaResponse struct {
-	Model      string    `json:"model"`
-	CreatedAt  time.Time `json:"created_at"`
-	Message    Message   `json:"message"`
-	Stream     bool      `json:"stream"`
-	DoneReason string    `json:"done_reason"`
-	Done       bool      `json:"done"`
-}
-
 // Peer represents a CrowdLlama peer node (can be either worker or consumer)
 type Peer struct {
 	Host       host.Host
@@ -74,8 +46,11 @@ type Peer struct {
 	Config     *config.Configuration
 	WorkerMode bool // true if this peer is in worker mode
 
+	// API handler for processing inference requests
+	APIHandler crowdllama.UnifiedAPIHandler
+
 	// Peer management
-	PeerManager *peermanager.Manager
+	PeerManager peermanager.PeerManagerI
 
 	// Logger
 	logger *zap.Logger
@@ -152,12 +127,21 @@ func createPeerInstance(
 	// Initialize peer manager
 	peerManagerConfig := getPeerManagerConfig()
 
+	// Set up API handler based on mode
+	var apiHandler crowdllama.UnifiedAPIHandler
+	if workerMode {
+		apiHandler = crowdllama.WorkerAPIHandler(cfg.GetOllamaBaseURL())
+	} else {
+		apiHandler = crowdllama.DefaultAPIHandler
+	}
+
 	peer := &Peer{
 		Host:              h,
 		DHT:               kadDHT,
 		Metadata:          metadata,
 		Config:            cfg,
 		WorkerMode:        workerMode,
+		APIHandler:        apiHandler,
 		PeerManager:       peermanager.NewManager(ctx, h, kadDHT, logger, peerManagerConfig),
 		metadataCtx:       metadataCtx,
 		metadataCancel:    metadataCancel,
@@ -192,7 +176,7 @@ func getPeerManagerConfig() *peermanager.Config {
 
 func setupStreamHandler(ctx context.Context, peer *Peer) {
 	// Set up stream handler with the peer instance
-	peer.Host.SetStreamHandler(InferenceProtocol, func(s network.Stream) {
+	peer.Host.SetStreamHandler(crowdllama.InferenceProtocol, func(s network.Stream) {
 		peer.handleInferenceRequest(ctx, s)
 	})
 }
@@ -218,25 +202,74 @@ func (p *Peer) handleInferenceRequest(ctx context.Context, s network.Stream) {
 		return
 	}
 
-	input, err := p.readInferenceInput(s)
+	// Read PB message from stream
+	req, err := p.readPBMessage(s)
 	if err != nil {
-		p.logger.Debug("Failed to read inference input", zap.Error(err))
+		p.logger.Debug("Failed to read PB message", zap.Error(err))
 		return
 	}
 
-	output, err := p.callOllamaAPI(ctx, input, "/api/chat")
+	// Log the inference request details
+	if generateReq := req.GetGenerateRequest(); generateReq != nil {
+		p.logger.Info("Worker received generate request",
+			zap.String("model", generateReq.Model),
+			zap.String("prompt", generateReq.Prompt),
+			zap.Bool("stream", generateReq.Stream),
+			zap.String("remote_peer", s.Conn().RemotePeer().String()))
+	}
+
+	// Add logger to context for API handler
+	ctxWithLogger := context.WithValue(ctx, "logger", p.logger)
+
+	// Process the request using the API handler
+	resp, err := p.APIHandler(ctxWithLogger, req)
 	if err != nil {
-		p.logger.Debug("Failed to call Ollama API", zap.Error(err))
+		p.logger.Error("Failed to process inference request", zap.Error(err))
+		// Create error response
+		resp = &llamav1.BaseMessage{
+			Message: &llamav1.BaseMessage_GenerateResponse{
+				GenerateResponse: &llamav1.GenerateResponse{
+					Response: fmt.Sprintf("Error: %v", err),
+					Done:     true,
+				},
+			},
+		}
+	}
+
+	// Write PB response to stream
+	if err := p.writePBMessage(s, resp); err != nil {
+		p.logger.Debug("Failed to write PB response", zap.Error(err))
 		return
 	}
 
-	if err := p.writeInferenceResponse(s, output); err != nil {
-		p.logger.Debug("Failed to write inference response", zap.Error(err))
-		return
-	}
-
-	p.logger.Debug("Worker sent response", zap.String("output", output))
+	p.logger.Info("Worker completed inference request",
+		zap.String("remote_peer", s.Conn().RemotePeer().String()))
 	p.logger.Debug("StreamHandler completed")
+}
+
+// readPBMessage reads a length-prefixed protobuf message from a network stream
+func (p *Peer) readPBMessage(s network.Stream) (*llamav1.BaseMessage, error) {
+	if err := s.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return nil, fmt.Errorf("failed to set read deadline: %w", err)
+	}
+
+	msg, err := crowdllama.ReadLengthPrefixedPB(s)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read length-prefixed PB message: %w", err)
+	}
+
+	p.logger.Debug("Worker received PB request", zap.Int("bytes", proto.Size(msg)))
+	return msg, nil
+}
+
+// writePBMessage writes a length-prefixed protobuf message to a network stream
+func (p *Peer) writePBMessage(s network.Stream, msg *llamav1.BaseMessage) error {
+	if err := crowdllama.WriteLengthPrefixedPB(s, msg); err != nil {
+		return fmt.Errorf("failed to write length-prefixed PB message: %w", err)
+	}
+
+	p.logger.Debug("Worker sent PB response", zap.Int("bytes", proto.Size(msg)))
+	return nil
 }
 
 func (p *Peer) readInferenceInput(s network.Stream) (string, error) {
@@ -253,63 +286,6 @@ func (p *Peer) readInferenceInput(s network.Stream) (string, error) {
 	input := string(buf[:n])
 	p.logger.Debug("Worker received inference request", zap.Int("bytes", n), zap.String("input", input))
 	return input, nil
-}
-
-func (p *Peer) callOllamaAPI(ctx context.Context, input, apiPath string) (string, error) {
-	ollamaReq := OllamaRequest{
-		Model: "tinyllama",
-		Messages: []Message{
-			{
-				Role:    "user",
-				Content: input,
-			},
-		},
-		Stream: false,
-	}
-
-	reqBody, err := json.Marshal(ollamaReq)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal Ollama request: %w", err)
-	}
-
-	baseURL := p.Config.GetOllamaBaseURL()
-	if baseURL == "" {
-		baseURL = "http://localhost:11434"
-	}
-
-	fullURL := baseURL + apiPath
-	req, err := http.NewRequestWithContext(ctx, "POST", fullURL, bytes.NewBuffer(reqBody))
-	if err != nil {
-		return "", fmt.Errorf("failed to create HTTP request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("failed to make HTTP request to Ollama: %w", err)
-	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			p.logger.Debug("Failed to close response body", zap.Error(closeErr))
-		}
-	}()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read Ollama response: %w", err)
-	}
-
-	var ollamaResp OllamaResponse
-	if err := json.Unmarshal(respBody, &ollamaResp); err != nil {
-		return "", fmt.Errorf("failed to unmarshal Ollama response: %w", err)
-	}
-
-	output := ollamaResp.Message.Content
-	if output == "" {
-		output = "No response content received from Ollama"
-	}
-
-	return output, nil
 }
 
 func (p *Peer) writeInferenceResponse(s network.Stream, output string) error {

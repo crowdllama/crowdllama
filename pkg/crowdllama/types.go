@@ -16,6 +16,9 @@ const (
 	// MetadataProtocol is the protocol for requesting peer metadata
 	MetadataProtocol = "/crowdllama/metadata/1.0.0"
 
+	// InferenceProtocol is the protocol identifier for inference requests
+	InferenceProtocol = "/crowdllama/inference/1.0.0"
+
 	// PeerMetadataPrefix is the DHT key prefix for peer metadata
 	PeerMetadataPrefix = "/crowdllama/peer/"
 

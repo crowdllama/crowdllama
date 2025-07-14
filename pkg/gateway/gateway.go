@@ -9,16 +9,16 @@ import (
 	"os"
 	"time"
 
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"go.uber.org/zap"
 
+	llamav1 "github.com/crowdllama/crowdllama-pb/llama/v1"
 	"github.com/crowdllama/crowdllama/internal/discovery"
 	"github.com/crowdllama/crowdllama/pkg/crowdllama"
 	peerpkg "github.com/crowdllama/crowdllama/pkg/peer"
+	"google.golang.org/protobuf/proto"
 )
-
-// InferenceProtocol is the protocol identifier for inference requests
-const InferenceProtocol = "/crowdllama/inference/1.0.0"
 
 // DefaultHTTPPort is the default HTTP port for the gateway
 const DefaultHTTPPort = 9001
@@ -56,6 +56,7 @@ type Gateway struct {
 	logger          *zap.Logger
 	discoveryCtx    context.Context
 	discoveryCancel context.CancelFunc
+	apiHandler      crowdllama.UnifiedAPIHandler
 }
 
 // NewGateway creates a new gateway instance using an existing Peer
@@ -70,6 +71,7 @@ func NewGateway(
 		logger:          logger,
 		discoveryCtx:    discoveryCtx,
 		discoveryCancel: discoveryCancel,
+		apiHandler:      crowdllama.DefaultAPIHandler,
 	}
 	return g, nil
 }
@@ -168,61 +170,51 @@ func (g *Gateway) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse the request
+	// Parse the request (JSON to PB)
 	var req GenerateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		g.logger.Error("Failed to decode request", zap.Error(err))
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
-
-	// Validate the request
 	if req.Model == "" {
 		http.Error(w, "Model is required", http.StatusBadRequest)
 		return
 	}
+	if len(req.Messages) == 0 {
+		http.Error(w, "At least one message is required", http.StatusBadRequest)
+		return
+	}
 
-	g.logger.Info("Processing chat request",
-		zap.String("model", req.Model),
-		zap.Any("messages", req.Messages),
-		zap.Bool("stream", req.Stream))
-
-	// Find the best worker for the model
 	ctx := r.Context()
 	bestWorker := g.FindBestWorker(req.Model)
 	if bestWorker == nil {
 		g.logger.Error("Failed to find suitable worker")
-		response := GenerateResponse{
-			Model: req.Model,
-		}
-		g.sendJSONResponse(w, response, http.StatusServiceUnavailable)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]string{"error": "No suitable worker found"})
 		return
 	}
 
-	// Request inference from the worker
-	response, err := g.RequestInference(ctx, bestWorker.PeerID, req.Messages[0].Content)
+	// Use PB-based RequestInference
+	pbResp, err := g.RequestInference(ctx, bestWorker.PeerID, req.Model, req.Messages[0].Content, req.Stream)
 	if err != nil {
 		g.logger.Error("Failed to request inference", zap.Error(err))
-		response := GenerateResponse{
-			Model: req.Model,
-		}
-		g.sendJSONResponse(w, response, http.StatusInternalServerError)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
 
-	// Send successful response
+	// Convert PB GenerateResponse to HTTP JSON response
 	generateResponse := GenerateResponse{
-		Model:     req.Model,
-		CreatedAt: time.Now(),
+		Model:     pbResp.GetModel(),
+		CreatedAt: pbResp.GetCreatedAt().AsTime(),
 		Message: Message{
 			Role:    "assistant",
-			Content: response,
+			Content: pbResp.GetResponse(),
 		},
-		Stream:     false,
-		Done:       true,
-		DoneReason: "done",
+		Done:       pbResp.GetDone(),
+		DoneReason: pbResp.GetDoneReason(),
 	}
-
 	g.sendJSONResponse(w, generateResponse, http.StatusOK)
 }
 
@@ -235,56 +227,68 @@ func (g *Gateway) sendJSONResponse(w http.ResponseWriter, response interface{}, 
 	}
 }
 
-// RequestInference sends a string task to a worker and waits for a response
-func (g *Gateway) RequestInference(ctx context.Context, workerID, input string) (string, error) {
+// RequestInference sends an inference request to a specific worker using PB messages
+func (g *Gateway) RequestInference(ctx context.Context, workerID, model, prompt string, stream bool) (*llamav1.GenerateResponse, error) {
 	pid, err := peer.Decode(workerID)
 	if err != nil {
-		return "", fmt.Errorf("invalid worker peer ID: %w", err)
+		return nil, fmt.Errorf("invalid worker peer ID: %w", err)
 	}
 	peerInfo, err := g.peer.DHT.FindPeer(ctx, pid)
 	if err != nil {
-		return "", fmt.Errorf("could not find worker peer: %w", err)
+		return nil, fmt.Errorf("could not find worker peer: %w", err)
 	}
-	g.logger.Debug("Opening stream to worker", zap.String("peer_id", peerInfo.ID.String()))
-	stream, err := g.peer.Host.NewStream(ctx, peerInfo.ID, InferenceProtocol)
+	streamObj, err := g.peer.Host.NewStream(ctx, peerInfo.ID, crowdllama.InferenceProtocol)
 	if err != nil {
-		return "", fmt.Errorf("failed to open stream: %w", err)
+		return nil, fmt.Errorf("failed to open stream: %w", err)
 	}
 	defer func() {
-		if closeErr := stream.Close(); closeErr != nil {
+		if closeErr := streamObj.Close(); closeErr != nil {
 			g.logger.Warn("failed to close stream", zap.Error(closeErr))
 		}
 	}()
 
-	g.logger.Debug("Writing input to stream", zap.String("input", input))
-	_, err = stream.Write([]byte(input))
+	// Create PB request
+	pbReq := crowdllama.CreateGenerateRequest(model, prompt, stream)
+	g.logger.Debug("Writing PB request to stream", zap.String("model", model), zap.String("prompt", prompt))
+	if err := g.writePBMessage(streamObj, pbReq); err != nil {
+		return nil, fmt.Errorf("failed to write PB request: %w", err)
+	}
+
+	g.logger.Debug("Waiting for PB response from worker...")
+	pbResp, err := g.readPBMessage(streamObj)
 	if err != nil {
-		return "", fmt.Errorf("failed to write to stream: %w", err)
+		return nil, fmt.Errorf("failed to read PB response: %w", err)
 	}
 
-	g.logger.Debug("Waiting for response from worker...")
-
-	// Read response byte by byte until EOF
-	var response string
-	buf := make([]byte, 1)
-	for {
-		n, err := stream.Read(buf)
-		if err != nil {
-			if err.Error() == "EOF" {
-				break // EOF reached, we're done reading
-			}
-			return "", fmt.Errorf("failed to read from stream: %w", err)
-		}
-		if n > 0 {
-			response += string(buf[:n])
-		}
+	generateResp, err := crowdllama.ExtractGenerateResponse(pbResp)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract GenerateResponse: %w", err)
 	}
 
-	g.logger.Info("Received response from worker",
+	g.logger.Info("Received PB response from worker",
 		zap.String("worker_id", workerID),
-		zap.Int("response_length", len(response)),
-		zap.String("response", response))
-	return response, nil
+		zap.String("model", generateResp.Model),
+		zap.String("response", generateResp.Response))
+	return generateResp, nil
+}
+
+// writePBMessage writes a length-prefixed protobuf message to a network stream
+func (g *Gateway) writePBMessage(s network.Stream, msg *llamav1.BaseMessage) error {
+	if err := crowdllama.WriteLengthPrefixedPB(s, msg); err != nil {
+		return fmt.Errorf("failed to write length-prefixed PB message: %w", err)
+	}
+	g.logger.Debug("Gateway sent PB request", zap.Int("bytes", proto.Size(msg)))
+	return nil
+}
+
+// readPBMessage reads a length-prefixed protobuf message from a network stream
+func (g *Gateway) readPBMessage(s network.Stream) (*llamav1.BaseMessage, error) {
+	msg, err := crowdllama.ReadLengthPrefixedPB(s)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read length-prefixed PB message: %w", err)
+	}
+	g.logger.Debug("Gateway received PB response", zap.Int("bytes", proto.Size(msg)))
+	return msg, nil
 }
 
 // DiscoverPeers searches for available peers in the DHT
@@ -320,54 +324,7 @@ func (g *Gateway) GetAvailableWorkers() map[string]*crowdllama.Resource {
 
 // FindBestWorker finds the best available worker for a specific model
 func (g *Gateway) FindBestWorker(requiredModel string) *crowdllama.Resource {
-	workers := g.GetAvailableWorkers()
-	if len(workers) == 0 {
-		return nil
-	}
-
-	// Filter workers that support the required model
-	suitableWorkers := make([]*crowdllama.Resource, 0)
-	for _, worker := range workers {
-		// Check if the worker supports the required model
-		supportsModel := false
-		for _, model := range worker.SupportedModels {
-			if model == requiredModel {
-				supportsModel = true
-				break
-			}
-		}
-
-		if supportsModel {
-			suitableWorkers = append(suitableWorkers, worker)
-		}
-	}
-
-	if len(suitableWorkers) == 0 {
-		return nil
-	}
-
-	// Select the best worker based on criteria (lowest load, highest throughput)
-	var selectedWorker *crowdllama.Resource
-	bestScore := float64(0)
-
-	for _, worker := range suitableWorkers {
-		// Simple scoring: tokens_throughput / (1 + current_load)
-		// This favors workers with high throughput and low current load
-		score := worker.TokensThroughput / (1 + worker.Load)
-		if score > bestScore {
-			bestScore = score
-			selectedWorker = worker
-		}
-	}
-
-	g.logger.Info("Selected best worker",
-		zap.String("worker_id", selectedWorker.PeerID),
-		zap.String("gpu_model", selectedWorker.GPUModel),
-		zap.Float64("tokens_throughput", selectedWorker.TokensThroughput),
-		zap.Float64("current_load", selectedWorker.Load),
-		zap.Int("total_suitable_workers", len(suitableWorkers)))
-
-	return selectedWorker
+	return g.peer.PeerManager.FindBestWorker(requiredModel)
 }
 
 // StartBackgroundDiscovery starts the background worker discovery process
@@ -481,4 +438,9 @@ func (g *Gateway) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	healthStatus := g.GetWorkerHealthStatus()
 	g.sendJSONResponse(w, healthStatus, http.StatusOK)
+}
+
+// SetAPIHandler sets the unified API handler for processing inference requests
+func (g *Gateway) SetAPIHandler(handler crowdllama.UnifiedAPIHandler) {
+	g.apiHandler = handler
 }

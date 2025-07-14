@@ -17,6 +17,23 @@ import (
 	"github.com/crowdllama/crowdllama/pkg/crowdllama"
 )
 
+// PeerManagerI defines the interface for peer management functionality
+type PeerManagerI interface {
+	GetHealthyPeers() map[string]*PeerInfo
+	GetAllPeers() map[string]*PeerInfo
+	GetAvailablePeers() map[string]*crowdllama.Resource
+	GetAvailableWorkers() map[string]*crowdllama.Resource
+	GetAvailableConsumers() map[string]*crowdllama.Resource
+	FindBestWorker(requiredModel string) *crowdllama.Resource
+	AddOrUpdatePeer(peerID string, metadata *crowdllama.Resource)
+	RemovePeer(peerID string)
+	IsPeerUnhealthy(peerID string) bool
+	MarkPeerAsRecentlyRemoved(peerID string)
+	Start()
+	Stop()
+	GetPeerStatistics() PeerStatistics
+}
+
 // Manager handles peer discovery, advertising, and management
 type Manager struct {
 	host   host.Host

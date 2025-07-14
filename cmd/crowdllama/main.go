@@ -225,9 +225,13 @@ func setupWorkerPeer(ctx context.Context, p *peer.Peer) {
 	// Start the peer manager
 	p.PeerManager.Start()
 
+	// Set the unified API handler for PB-based inference
+	p.APIHandler = crowdllama.WorkerAPIHandler(cfg.GetOllamaBaseURL())
+
 	// Set the peer instance in IPC server if available
 	if ipcServer != nil {
 		ipcServer.SetWorkerInstance(p)
+		ipcServer.SetAPIHandler(crowdllama.WorkerAPIHandler(cfg.GetOllamaBaseURL()))
 	}
 
 	logger.Info("Peer initialized in worker mode", zap.String("peer_id", p.Host.ID().String()))
@@ -316,6 +320,15 @@ func setupConsumerPeer(ctx context.Context, p *peer.Peer) *gateway.Gateway {
 	if err != nil {
 		logger.Error("Failed to start gateway", zap.Error(err))
 		return nil
+	}
+
+	// Set the unified API handler for PB-based inference
+	g.SetAPIHandler(crowdllama.DefaultAPIHandler)
+
+	// Set the peer instance in IPC server if available
+	if ipcServer != nil {
+		ipcServer.SetConsumerInstance(p)
+		ipcServer.SetAPIHandler(crowdllama.DefaultAPIHandler)
 	}
 
 	logger.Info("Peer initialized in consumer mode", zap.String("peer_id", p.Host.ID().String()))
