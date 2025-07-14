@@ -211,6 +211,11 @@ func (p *Peer) handleInferenceRequest(ctx context.Context, s network.Stream) {
 
 	// Log the inference request details
 	if generateReq := req.GetGenerateRequest(); generateReq != nil {
+		p.logger.Debug("Worker received inference request from network",
+			zap.String("model", generateReq.Model),
+			zap.String("prompt", generateReq.Prompt),
+			zap.Bool("stream", generateReq.Stream),
+			zap.String("remote_peer", s.Conn().RemotePeer().String()))
 		p.logger.Info("Worker received generate request",
 			zap.String("model", generateReq.Model),
 			zap.String("prompt", generateReq.Prompt),
@@ -237,6 +242,8 @@ func (p *Peer) handleInferenceRequest(ctx context.Context, s network.Stream) {
 	}
 
 	// Write PB response to stream
+	p.logger.Debug("Worker sending inference response to network",
+		zap.String("remote_peer", s.Conn().RemotePeer().String()))
 	if err := p.writePBMessage(s, resp); err != nil {
 		p.logger.Debug("Failed to write PB response", zap.Error(err))
 		return
